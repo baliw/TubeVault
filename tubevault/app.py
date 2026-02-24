@@ -43,7 +43,7 @@ class TubeVaultApp(App):
     # These survive SyncScreen being popped so progress can be replayed
     # when the user navigates back to the sync view.
     sync_running: bool = False
-    sync_logs: list[str] = []
+    sync_logs: list[Any] = []
     sync_progress: Any = None  # ChannelSyncProgress | None
 
     def on_mount(self) -> None:

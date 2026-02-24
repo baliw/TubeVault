@@ -57,7 +57,7 @@ class SyncScreen(Screen):
 
         # Replay any log lines accumulated while this screen was not visible.
         for msg in self.app.sync_logs:
-            log.write(Text(msg))
+            log.write(msg if isinstance(msg, Text) else Text(msg))
 
         # Show the latest progress snapshot.
         if self.app.sync_progress is not None:
@@ -79,7 +79,7 @@ class SyncScreen(Screen):
 
         self.app.sync_running = True
 
-        def _write_log(msg: str) -> None:
+        def _write_log(msg: Any) -> None:
             self.app.sync_logs.append(msg)
             loop.call_soon_threadsafe(ctx.run, self._deliver_log, msg)
 
@@ -116,14 +116,14 @@ class SyncScreen(Screen):
             finally:
                 self.app.sync_running = False
 
-    def _deliver_log(self, msg: str) -> None:
+    def _deliver_log(self, msg: Any) -> None:
         """Write a log line to whichever SyncScreen is currently on the stack."""
         for screen in self.app.screen_stack:
             if isinstance(screen, SyncScreen):
                 try:
                     log = screen.query_one("#output_log", RichLog)
                     if log.is_mounted:
-                        log.write(Text(msg))
+                        log.write(msg if isinstance(msg, Text) else Text(msg))
                 except Exception:
                     pass
                 return

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from rich.text import Text
+
 from tubevault.core.config import load_config
 from tubevault.core.database import (
     load_library,
@@ -55,7 +57,7 @@ class ChannelSyncProgress:
 
 
 SyncCallback = Callable[[ChannelSyncProgress], None]
-LogCallback = Callable[[str], None]
+LogCallback = Callable[[Any], None]
 
 
 async def sync_channel(
@@ -175,7 +177,9 @@ async def _process_video(
                 _log(log_callback, f"Download error for {video_id}: {exc}")
 
             # Always pause between requests regardless of outcome.
-            await asyncio.sleep(INTER_REQUEST_DELAY)
+            for remaining in range(INTER_REQUEST_DELAY, 0, -1):
+                _log(log_callback, Text(f"  ⏸ next request in {remaining}s", style="dim cyan"))
+                await asyncio.sleep(1)
 
             if not failed:
                 break
@@ -183,12 +187,12 @@ async def _process_video(
             # Compute how long to wait before retrying.
             delay = DOWNLOAD_RETRY_DELAYS[min(attempt, len(DOWNLOAD_RETRY_DELAYS) - 1)]
             attempt += 1
-            _log(log_callback, f"Download failed. Retrying in {delay}s (attempt {attempt + 1})…")
 
             for remaining in range(delay, 0, -1):
                 prog.retry_countdown = remaining
                 prog.retry_message = f"Download failed — retrying in {remaining}s"
                 _emit(callback, prog)
+                _log(log_callback, Text(f"  ⏳ retrying in {remaining}s", style="bold orange1"))
                 await asyncio.sleep(1)
 
             prog.retry_countdown = 0
@@ -275,7 +279,7 @@ def _emit(callback: SyncCallback | None, prog: ChannelSyncProgress) -> None:
             logger.debug("Progress callback error: %s", exc)
 
 
-def _log(callback: LogCallback | None, msg: str) -> None:
+def _log(callback: LogCallback | None, msg: Any) -> None:
     if callback:
         try:
             callback(msg)
