@@ -1,5 +1,6 @@
 """Synchronization progress screen."""
 
+import asyncio
 import logging
 from typing import Any
 
@@ -49,19 +50,19 @@ class SyncScreen(Screen):
     def on_mount(self) -> None:
         self.run_worker(self._run_sync(), exclusive=False)
 
-    def _write_log(self, msg: str) -> None:
-        """Thread-safe write to the output log widget.
-
-        Args:
-            msg: Plain text message to append.
-        """
-        self.call_from_thread(self.query_one("#output_log", RichLog).write, Text(msg))
-
     async def _run_sync(self) -> None:
+        # Cache widget references and event loop NOW (main async context).
+        # Callbacks may be invoked from executor threads, so we must not
+        # call query_one() or capture asyncio.get_running_loop() from there.
         panel: ProgressPanel = self.query_one("#progress_panel", ProgressPanel)
+        log: RichLog = self.query_one("#output_log", RichLog)
+        loop = asyncio.get_running_loop()
+
+        def _write_log(msg: str) -> None:
+            loop.call_soon_threadsafe(log.write, Text(msg))
 
         def _progress_callback(prog: ChannelSyncProgress) -> None:
-            self.call_from_thread(panel.update_progress, prog)
+            loop.call_soon_threadsafe(panel.update_progress, prog)
 
         try:
             if self._channel_name and self._channel_url:
@@ -75,16 +76,16 @@ class SyncScreen(Screen):
                     quality=quality,
                     max_concurrent=max_concurrent,
                     progress_callback=_progress_callback,
-                    log_callback=self._write_log,
+                    log_callback=_write_log,
                 )
             else:
                 await sync_all_channels(
                     progress_callback=_progress_callback,
-                    log_callback=self._write_log,
+                    log_callback=_write_log,
                 )
         except Exception as exc:
             logger.error("Sync error: %s", exc)
-            self._write_log(f"ERROR: {exc}")
+            loop.call_soon_threadsafe(log.write, Text(f"ERROR: {exc}"))
 
     def action_back(self) -> None:
         self.app.pop_screen()

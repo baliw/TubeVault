@@ -64,11 +64,27 @@ def save_config(config: dict[str, Any]) -> None:
         json.dump(config, f, indent=2)
 
 
+def _normalize_channel_url(url: str) -> str:
+    """Normalize a channel URL or bare handle to a full https URL.
+
+    Args:
+        url: Raw input — may be a full URL, @handle, or bare handle.
+
+    Returns:
+        Full https://www.youtube.com/... URL.
+    """
+    url = url.strip()
+    if not url.startswith("http"):
+        handle = url.lstrip("@")
+        return f"https://www.youtube.com/@{handle}"
+    return url
+
+
 def add_channel(url: str, name: str) -> dict[str, Any]:
     """Add a channel to the config.
 
     Args:
-        url: Channel URL (e.g. https://www.youtube.com/@handle).
+        url: Channel URL or @handle.
         name: Display name / slug for the channel.
 
     Returns:
@@ -77,7 +93,7 @@ def add_channel(url: str, name: str) -> dict[str, Any]:
     config = load_config()
     entry = {
         "name": name,
-        "url": url,
+        "url": _normalize_channel_url(url),
         "added_date": datetime.now(timezone.utc).isoformat(),
         "auto_sync": True,
     }

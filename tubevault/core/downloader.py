@@ -86,20 +86,27 @@ def _ydl_opts_base(
 
 
 def _videos_url(channel_url: str) -> str:
-    """Ensure the channel URL points to the /videos tab.
+    """Normalize a channel URL/handle and point it at the /videos tab.
 
-    yt-dlp returns tabs (Videos/Shorts/Live) as nested playlists when given
-    a bare channel URL. Pointing directly at /videos gives a flat video list.
+    Handles bare handles (@name), channel IDs (UCxxx), and full URLs.
 
     Args:
-        channel_url: Raw channel URL entered by the user.
+        channel_url: Raw channel URL or handle entered by the user.
 
     Returns:
-        URL guaranteed to target the Videos tab.
+        Full https URL targeting the Videos tab.
     """
-    url = channel_url.rstrip("/")
+    url = channel_url.strip().rstrip("/")
+
+    # Bare handle: @channelname  or  channelname
+    if not url.startswith("http"):
+        handle = url.lstrip("@")
+        url = f"https://www.youtube.com/@{handle}"
+
+    # Already on a specific tab — leave as-is
     if url.endswith(("/videos", "/shorts", "/live", "/streams")):
         return url
+
     return url + "/videos"
 
 
