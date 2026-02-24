@@ -1,12 +1,12 @@
 """Synchronization progress screen."""
 
-import asyncio
 import logging
 from typing import Any
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Label, Static
+from textual.widgets import Footer, Header, Label, RichLog, Static
 
 from tubevault.core.sync import ChannelSyncProgress, sync_channel, sync_all_channels
 from tubevault.widgets.progress_panel import ProgressPanel
@@ -36,19 +36,31 @@ class SyncScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Static("Synchronizing…", id="sync_title")
         yield Label("Press Escape to return; sync continues in background.", id="sync_hint")
         yield ProgressPanel(channel_name=self._channel_name or "", id="progress_panel")
+        yield RichLog(
+            highlight=False,
+            markup=False,
+            wrap=True,
+            id="output_log",
+        )
         yield Footer()
 
     def on_mount(self) -> None:
         self.run_worker(self._run_sync(), exclusive=False)
 
+    def _write_log(self, msg: str) -> None:
+        """Thread-safe write to the output log widget.
+
+        Args:
+            msg: Plain text message to append.
+        """
+        self.call_from_thread(self.query_one("#output_log", RichLog).write, Text(msg))
+
     async def _run_sync(self) -> None:
         panel: ProgressPanel = self.query_one("#progress_panel", ProgressPanel)
 
-        def _callback(prog: ChannelSyncProgress) -> None:
-            # Schedule UI update on main thread
+        def _progress_callback(prog: ChannelSyncProgress) -> None:
             self.call_from_thread(panel.update_progress, prog)
 
         try:
@@ -62,16 +74,17 @@ class SyncScreen(Screen):
                     channel_url=self._channel_url,
                     quality=quality,
                     max_concurrent=max_concurrent,
-                    progress_callback=_callback,
+                    progress_callback=_progress_callback,
+                    log_callback=self._write_log,
                 )
             else:
-                await sync_all_channels(progress_callback=_callback)
+                await sync_all_channels(
+                    progress_callback=_progress_callback,
+                    log_callback=self._write_log,
+                )
         except Exception as exc:
             logger.error("Sync error: %s", exc)
-            self.call_from_thread(
-                self.query_one("#sync_title", Static).update,
-                f"Sync error: {exc}",
-            )
+            self._write_log(f"ERROR: {exc}")
 
     def action_back(self) -> None:
         self.app.pop_screen()
@@ -79,17 +92,22 @@ class SyncScreen(Screen):
     DEFAULT_CSS = """
     SyncScreen {
         padding: 1 2;
-    }
-    #sync_title {
-        text-style: bold;
-        color: $accent;
-        margin-bottom: 1;
+        layout: vertical;
     }
     #sync_hint {
         color: $text-muted;
-        margin-bottom: 2;
+        margin-bottom: 1;
     }
     #progress_panel {
         width: 100%;
+        height: auto;
+        margin-bottom: 1;
+    }
+    #output_log {
+        width: 100%;
+        height: 1fr;
+        border: solid $panel-lighten-2;
+        background: $panel;
+        padding: 0 1;
     }
     """

@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -10,7 +10,6 @@ from tubevault.core.config import load_config
 from tubevault.core.database import (
     load_library,
     mark_library_synced,
-    save_metadata,
     save_summary,
     save_transcript,
     upsert_video,
@@ -47,6 +46,7 @@ class ChannelSyncProgress:
 
 
 SyncCallback = Callable[[ChannelSyncProgress], None]
+LogCallback = Callable[[str], None]
 
 
 async def sync_channel(
@@ -55,6 +55,7 @@ async def sync_channel(
     quality: str = "1080p",
     max_concurrent: int = 2,
     progress_callback: SyncCallback | None = None,
+    log_callback: LogCallback | None = None,
 ) -> None:
     """Sync a single channel: fetch video list, download new videos, transcribe, summarize.
 
@@ -64,27 +65,28 @@ async def sync_channel(
         quality: Download quality string.
         max_concurrent: Max concurrent download workers.
         progress_callback: Optional callback invoked on each state change.
+        log_callback: Optional callback for human-readable log lines.
     """
     prog = ChannelSyncProgress(channel_name=channel_name)
     _emit(progress_callback, prog)
 
-    logger.info("Fetching video list for channel %s…", channel_name)
+    _log(log_callback, f"=== Syncing channel: {channel_name} ===")
+    _log(log_callback, f"Fetching video list…")
+
     try:
-        remote_videos = await fetch_channel_videos(channel_url)
+        remote_videos = await fetch_channel_videos(channel_url, log_callback=log_callback)
     except Exception as exc:
         prog.error = str(exc)
         prog.done = True
         _emit(progress_callback, prog)
+        _log(log_callback, f"ERROR fetching channel videos: {exc}")
         logger.error("Failed to fetch channel videos: %s", exc)
         return
 
     library = load_library(channel_name)
     existing_ids = {v["video_id"] for v in library.get("videos", [])}
 
-    # New videos not yet in library
     new_videos = [v for v in remote_videos if v["video_id"] not in existing_ids]
-
-    # Existing videos that are missing transcript or summary
     backfill_videos = [
         v for v in library.get("videos", [])
         if not v.get("has_transcript") or not v.get("has_summary")
@@ -94,14 +96,16 @@ async def sync_channel(
     prog.total = len(to_process)
     _emit(progress_callback, prog)
 
+    _log(log_callback, f"{len(new_videos)} new videos, {len(backfill_videos)} to backfill")
+
     if not to_process:
+        _log(log_callback, "Channel is up to date.")
         logger.info("Channel %s is up to date.", channel_name)
         mark_library_synced(channel_name)
         prog.done = True
         _emit(progress_callback, prog)
         return
 
-    # Upsert new video stubs into library
     for v in new_videos:
         upsert_video(channel_name, v)
 
@@ -110,9 +114,13 @@ async def sync_channel(
     async def _process_one(video: dict[str, Any]) -> None:
         async with semaphore:
             try:
-                await _process_video(channel_name, video, quality, prog, progress_callback)
+                await _process_video(
+                    channel_name, video, quality, prog, progress_callback, log_callback
+                )
             except Exception as exc:
-                logger.error("Failed to process video %s: %s", video.get("video_id"), exc)
+                msg = f"Failed to process {video.get('video_id')}: {exc}"
+                logger.error(msg)
+                _log(log_callback, f"ERROR: {msg}")
             prog.completed += 1
             _emit(progress_callback, prog)
 
@@ -122,7 +130,8 @@ async def sync_channel(
     prog.done = True
     prog.current_video = None
     _emit(progress_callback, prog)
-    logger.info("Channel %s sync complete. Processed %d videos.", channel_name, len(to_process))
+    _log(log_callback, f"=== Sync complete: {len(to_process)} videos processed ===")
+    logger.info("Channel %s sync complete.", channel_name)
 
 
 async def _process_video(
@@ -131,16 +140,9 @@ async def _process_video(
     quality: str,
     prog: ChannelSyncProgress,
     callback: SyncCallback | None,
+    log_callback: LogCallback | None,
 ) -> None:
-    """Process a single video: download, transcript, summary.
-
-    Args:
-        channel_name: Channel slug.
-        video: Video entry dict.
-        quality: Download quality.
-        prog: Shared channel progress object.
-        callback: Progress callback.
-    """
+    """Process a single video: download, transcript, summary."""
     video_id = video["video_id"]
     title = video.get("title", video_id)
     vp = VideoProgress(video_id=video_id, title=title)
@@ -149,27 +151,36 @@ async def _process_video(
 
     # --- Download ---
     if not video.get("has_video"):
+        _log(log_callback, f"--- Downloading: {title} ({video_id}) ---")
         mp4_path = await download_video(
             channel_name,
             video_id,
             quality=quality,
             progress_callback=lambda p: _update_download(vp, p, prog, callback),
+            log_callback=log_callback,
         )
         if mp4_path:
             size_mb = mp4_path.stat().st_size / (1024 * 1024)
-            upsert_video(channel_name, {"video_id": video_id, "has_video": True, "file_size_mb": round(size_mb, 2)})
+            upsert_video(channel_name, {
+                "video_id": video_id,
+                "has_video": True,
+                "file_size_mb": round(size_mb, 2),
+            })
             vp.download = 1.0
+            _log(log_callback, f"Download complete: {size_mb:.1f} MB")
         else:
-            vp.download = -1.0  # error sentinel
+            vp.download = -1.0
+            _log(log_callback, f"Download failed for {video_id}")
         _emit(callback, prog)
     else:
         vp.download = 1.0
 
     # --- Transcript ---
     if not video.get("has_transcript"):
+        _log(log_callback, f"Fetching transcript for {video_id}…")
         vp.transcript = "in_progress"
         _emit(callback, prog)
-        segments = await fetch_transcript(channel_name, video_id)
+        segments = await fetch_transcript(channel_name, video_id, log_callback=log_callback)
         if segments:
             save_transcript(channel_name, video_id, segments)
             upsert_video(channel_name, {"video_id": video_id, "has_transcript": True})
@@ -183,6 +194,7 @@ async def _process_video(
 
     # --- Summary ---
     if not video.get("has_summary") and vp.transcript == "done":
+        _log(log_callback, f"Generating AI summary for {video_id}…")
         vp.summary = "in_progress"
         _emit(callback, prog)
 
@@ -194,9 +206,11 @@ async def _process_video(
                 save_summary(channel_name, video_id, summary)
                 upsert_video(channel_name, {"video_id": video_id, "has_summary": True})
                 vp.summary = "done"
+                _log(log_callback, f"Summary generated for {video_id}")
             else:
                 upsert_video(channel_name, {"video_id": video_id, "has_summary": False})
                 vp.summary = "error"
+                _log(log_callback, f"Summary generation failed for {video_id}")
         else:
             vp.summary = "skipped"
         _emit(callback, prog)
@@ -224,13 +238,23 @@ def _emit(callback: SyncCallback | None, prog: ChannelSyncProgress) -> None:
             logger.debug("Progress callback error: %s", exc)
 
 
+def _log(callback: LogCallback | None, msg: str) -> None:
+    if callback:
+        try:
+            callback(msg)
+        except Exception as exc:
+            logger.debug("Log callback error: %s", exc)
+
+
 async def sync_all_channels(
     progress_callback: SyncCallback | None = None,
+    log_callback: LogCallback | None = None,
 ) -> None:
     """Sync all channels configured in config.json.
 
     Args:
         progress_callback: Optional callback for progress updates.
+        log_callback: Optional callback for human-readable log lines.
     """
     config = load_config()
     channels = config.get("channels", [])
@@ -246,4 +270,5 @@ async def sync_all_channels(
             quality=quality,
             max_concurrent=max_concurrent,
             progress_callback=progress_callback,
+            log_callback=log_callback,
         )

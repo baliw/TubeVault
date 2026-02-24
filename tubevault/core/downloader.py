@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -15,28 +16,73 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 2.0  # seconds; exponential backoff
 
+LogCallback = Callable[[str], None]
 
-def _ydl_opts_base(output_dir: Path, quality: str = "1080p") -> dict[str, Any]:
+# yt-dlp debug lines that are just download progress noise (handled by the
+# progress bar instead).
+_PROGRESS_RE = re.compile(r"\[download\].*?(?:\d+\.\d+%|ETA|at\s+\d)")
+
+
+class _YdlLogger:
+    """Custom yt-dlp logger that forwards messages to a TUI log callback.
+
+    Filters out raw download-progress lines (percentage/ETA spam) since
+    those are shown separately in the progress bar.
+    """
+
+    def __init__(self, callback: LogCallback) -> None:
+        self._cb = callback
+
+    def debug(self, msg: str) -> None:
+        # yt-dlp sends download progress as debug; skip the noise
+        if _PROGRESS_RE.search(msg):
+            return
+        if msg.strip():
+            self._cb(msg)
+
+    def info(self, msg: str) -> None:
+        if msg.strip():
+            self._cb(msg)
+
+    def warning(self, msg: str) -> None:
+        if msg.strip():
+            self._cb(f"WARNING: {msg}")
+
+    def error(self, msg: str) -> None:
+        if msg.strip():
+            self._cb(f"ERROR: {msg}")
+
+
+def _ydl_opts_base(
+    output_dir: Path,
+    quality: str = "1080p",
+    log_callback: LogCallback | None = None,
+) -> dict[str, Any]:
     """Build base yt-dlp options dict.
 
     Args:
         output_dir: Directory to write files into.
         quality: Maximum video quality (e.g. '1080p').
+        log_callback: Optional callback for yt-dlp output lines.
 
     Returns:
         yt-dlp options dict.
     """
     height = int(quality.rstrip("p")) if quality.endswith("p") else 1080
-    return {
+    opts: dict[str, Any] = {
         "format": f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={height}]+bestaudio/best[height<={height}]/best",
         "merge_output_format": "mp4",
         "outtmpl": str(output_dir / "video.%(ext)s"),
-        "quiet": True,
-        "no_warnings": True,
         "ignoreerrors": False,
         "retries": MAX_RETRIES,
         "fragment_retries": MAX_RETRIES,
     }
+    if log_callback:
+        opts["logger"] = _YdlLogger(log_callback)
+    else:
+        opts["quiet"] = True
+        opts["no_warnings"] = True
+    return opts
 
 
 def _videos_url(channel_url: str) -> str:
@@ -57,30 +103,44 @@ def _videos_url(channel_url: str) -> str:
     return url + "/videos"
 
 
-async def fetch_channel_videos(channel_url: str) -> list[dict[str, Any]]:
+async def fetch_channel_videos(
+    channel_url: str,
+    log_callback: LogCallback | None = None,
+) -> list[dict[str, Any]]:
     """Fetch the list of video metadata entries for a channel.
 
     Args:
         channel_url: YouTube channel URL.
+        log_callback: Optional callback for yt-dlp output lines.
 
     Returns:
         List of video info dicts.
     """
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _fetch_channel_videos_sync, channel_url)
+    return await loop.run_in_executor(
+        None, _fetch_channel_videos_sync, channel_url, log_callback
+    )
 
 
-def _fetch_channel_videos_sync(channel_url: str) -> list[dict[str, Any]]:
+def _fetch_channel_videos_sync(
+    channel_url: str,
+    log_callback: LogCallback | None = None,
+) -> list[dict[str, Any]]:
     """Synchronous implementation of channel video listing."""
     url = _videos_url(channel_url)
     logger.info("Fetching video list from %s", url)
+    if log_callback:
+        log_callback(f"Fetching video list from {url}")
 
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
+    opts: dict[str, Any] = {
         "extract_flat": True,
         "ignoreerrors": True,
     }
+    if log_callback:
+        opts["logger"] = _YdlLogger(log_callback)
+    else:
+        opts["quiet"] = True
+        opts["no_warnings"] = True
 
     results = []
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -111,7 +171,10 @@ def _fetch_channel_videos_sync(channel_url: str) -> list[dict[str, Any]]:
                 }
             )
 
-    logger.info("Found %d videos for channel", len(results))
+    msg = f"Found {len(results)} videos"
+    logger.info(msg)
+    if log_callback:
+        log_callback(msg)
     return results
 
 
@@ -127,6 +190,7 @@ async def download_video(
     video_id: str,
     quality: str = "1080p",
     progress_callback: Callable[[float], None] | None = None,
+    log_callback: LogCallback | None = None,
 ) -> Path | None:
     """Download a YouTube video to the channel's video directory.
 
@@ -135,6 +199,7 @@ async def download_video(
         video_id: YouTube video ID.
         quality: Maximum quality string (e.g. '1080p').
         progress_callback: Optional callable receiving progress 0.0–1.0.
+        log_callback: Optional callback for yt-dlp output lines.
 
     Returns:
         Path to the downloaded .mp4 file, or None on failure.
@@ -153,18 +218,22 @@ async def download_video(
                 out_dir,
                 quality,
                 progress_callback,
+                log_callback,
             )
             if result:
                 return result
         except Exception as exc:
-            logger.warning(
-                "Download attempt %d/%d failed for %s: %s",
-                attempt, MAX_RETRIES, video_id, exc,
-            )
+            msg = f"Download attempt {attempt}/{MAX_RETRIES} failed for {video_id}: {exc}"
+            logger.warning(msg)
+            if log_callback:
+                log_callback(msg)
             if attempt < MAX_RETRIES:
                 await asyncio.sleep(RETRY_BASE_DELAY ** attempt)
 
-    logger.error("All download attempts failed for %s", video_id)
+    msg = f"All download attempts failed for {video_id}"
+    logger.error(msg)
+    if log_callback:
+        log_callback(msg)
     return None
 
 
@@ -173,9 +242,10 @@ def _download_sync(
     out_dir: Path,
     quality: str,
     progress_callback: Callable[[float], None] | None,
+    log_callback: LogCallback | None,
 ) -> Path | None:
     """Synchronous yt-dlp download."""
-    opts = _ydl_opts_base(out_dir, quality)
+    opts = _ydl_opts_base(out_dir, quality, log_callback=log_callback)
 
     if progress_callback:
         def _hook(d: dict[str, Any]) -> None:
