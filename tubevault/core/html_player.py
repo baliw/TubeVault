@@ -31,9 +31,9 @@ def open_video_player(channel_name: str, video: dict[str, Any]) -> None:
     video_file = vdir / "video.mp4"
     summary = load_summary(channel_name, video_id) or {}
 
-    # Format main points for template
+    # Format main points for template, sorted by ascending timestamp
     main_points = []
-    for point in summary.get("main_points", []):
+    for point in sorted(summary.get("main_points", []), key=lambda p: p.get("start_time_seconds", 0)):
         main_points.append(
             {
                 **point,
