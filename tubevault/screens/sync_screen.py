@@ -1,6 +1,5 @@
 """Synchronization progress screen."""
 
-import asyncio
 import contextlib
 import logging
 import os
@@ -55,39 +54,27 @@ class SyncScreen(Screen):
         self.run_worker(self._run_sync(), exclusive=False)
 
     async def _run_sync(self) -> None:
-        # Cache widget references and event loop NOW (main async context).
-        # Callbacks may be invoked from executor threads, so we must not
-        # call query_one() or capture asyncio.get_running_loop() from there.
+        # Cache widget references NOW (main async context).
+        # Callbacks may be invoked from executor threads.
         panel: ProgressPanel = self.query_one("#progress_panel", ProgressPanel)
         log: RichLog = self.query_one("#output_log", RichLog)
-        loop = asyncio.get_running_loop()
+        app = self.app
 
+        # Textual 8 uses call_from_thread() for thread-safe widget updates.
+        # It propagates the active_app ContextVar correctly, unlike
+        # loop.call_soon_threadsafe() which does not carry ContextVars.
         def _write_log(msg: str) -> None:
             if log.is_mounted:
-                loop.call_soon_threadsafe(log.write, Text(msg))
+                app.call_from_thread(log.write, Text(msg))
 
         def _progress_callback(prog: ChannelSyncProgress) -> None:
             if panel.is_mounted:
-                loop.call_soon_threadsafe(panel.update_progress, prog)
+                app.call_from_thread(panel.update_progress, prog)
 
-        # Suppress all output that could corrupt the Textual terminal:
-        #
-        # Layer 1 — Python level: contextlib.redirect_* covers any Python
-        #   code that writes via sys.stdout / sys.stderr.
-        #
-        # Layer 2 — OS fd level: os.dup2 covers native subprocesses (ffmpeg,
-        #   etc.) that yt-dlp forks.  Those processes inherit file descriptor
-        #   2 (stderr) from the parent and write directly at the OS level,
-        #   completely bypassing Python's sys.stderr object.  We save fd 2,
-        #   point it at /dev/null for the duration of the sync, then restore.
-        #
-        # We intentionally leave fd 1 (stdout) alone because Textual's
-        # terminal driver writes there for screen rendering.
-        saved_stderr_fd = os.dup(2)
-        devnull_fd = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull_fd, 2)
-        os.close(devnull_fd)
-
+        # Suppress Python-level stdout/stderr from yt-dlp and libraries.
+        # We do NOT redirect fd 2 at the OS level because Textual 8's
+        # terminal driver writes all screen rendering directly to fd 2
+        # (sys.__stderr__), so redirecting it would blank the entire UI.
         devnull = open(os.devnull, "w")
         try:
             with (
@@ -116,12 +103,9 @@ class SyncScreen(Screen):
                     )
         except Exception as exc:
             logger.error("Sync error: %s", exc)
-            loop.call_soon_threadsafe(log.write, Text(f"ERROR: {exc}"))
+            app.call_from_thread(log.write, Text(f"ERROR: {exc}"))
         finally:
             devnull.close()
-            # Restore stderr fd so logging works normally after sync.
-            os.dup2(saved_stderr_fd, 2)
-            os.close(saved_stderr_fd)
 
     def action_back(self) -> None:
         self.app.pop_screen()
