@@ -76,12 +76,14 @@ def _ydl_opts_base(
         "ignoreerrors": False,
         "retries": MAX_RETRIES,
         "fragment_retries": MAX_RETRIES,
+        # Always suppress direct terminal writes; the custom logger handles
+        # all message output independently of these flags.
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
     }
     if log_callback:
         opts["logger"] = _YdlLogger(log_callback)
-    else:
-        opts["quiet"] = True
-        opts["no_warnings"] = True
     return opts
 
 
@@ -142,12 +144,12 @@ def _fetch_channel_videos_sync(
     opts: dict[str, Any] = {
         "extract_flat": True,
         "ignoreerrors": True,
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
     }
     if log_callback:
         opts["logger"] = _YdlLogger(log_callback)
-    else:
-        opts["quiet"] = True
-        opts["no_warnings"] = True
 
     results = []
     with yt_dlp.YoutubeDL(opts) as ydl:

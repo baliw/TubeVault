@@ -113,12 +113,12 @@ def _fetch_via_ytdlp(
         "subtitlesformat": "json3",
         "subtitleslangs": ["en"],
         "outtmpl": str(out_dir / "sub.%(ext)s"),
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
     }
     if log_callback:
         opts["logger"] = _YdlLogger(log_callback)
-    else:
-        opts["quiet"] = True
-        opts["no_warnings"] = True
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.download([url])
