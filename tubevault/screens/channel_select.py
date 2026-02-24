@@ -83,7 +83,7 @@ class ChannelSelectScreen(Screen):
         for ch in channels:
             name = ch["name"]
             url = ch.get("url", "")
-            lv.append(ListItem(Label(f"{name}  [dim]{url}[/dim]"), id=f"ch_{name}"))
+            lv.append(ListItem(Label(f"{name}  [dim]{url}[/dim]")))
         if not channels:
             lv.append(ListItem(Label("[dim]No channels yet — press [bold]a[/bold] to add one.[/dim]")))
         self.call_after_refresh(lv.focus)
