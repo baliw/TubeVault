@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import ContentSwitcher, Footer, Header, Input, Label, Static
@@ -34,10 +35,10 @@ class LibraryBrowserScreen(Screen):
     TITLE = "TubeVault"
 
     BINDINGS = [
-        ("escape", "back", "Back"),
-        ("q", "app.quit", "Quit"),
-        ("tab", "switch_tab", "Switch Tab"),
-        ("/", "show_search", "Search"),
+        Binding("escape", "back", "Back", priority=True),
+        Binding("q", "app.quit", "Quit", priority=True),
+        Binding("tab", "switch_tab", "Switch Tab", priority=True),
+        Binding("/", "show_search", "Search", priority=True),
     ]
 
     class SyncChannelRequested(Message):

@@ -28,7 +28,7 @@ class TubeVaultApp(App):
     CSS = APP_CSS
 
     BINDINGS = [
-        Binding("ctrl+c", "quit", "Quit", show=False),
+        Binding("ctrl+q", "quit", "Quit", show=False, priority=True),
     ]
 
     def on_mount(self) -> None:

@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.message import Message
 from textual.screen import Screen
 from textual.containers import Vertical
@@ -29,11 +30,11 @@ class ChannelSelectScreen(Screen):
     TITLE = "TubeVault"
 
     BINDINGS = [
-        ("escape", "app.quit", "Quit"),
-        ("q", "app.quit", "Quit"),
-        ("a", "add_channel", "Add Channel"),
-        ("r", "remove_channel", "Remove Channel"),
-        ("s", "sync_all", "Sync All"),
+        Binding("escape", "app.quit", "Quit", priority=True),
+        Binding("q", "app.quit", "Quit", priority=True),
+        Binding("a", "add_channel", "Add Channel", priority=True),
+        Binding("r", "remove_channel", "Remove Channel", priority=True),
+        Binding("s", "sync_all", "Sync All", priority=True),
     ]
 
     class ChannelSelected(Message):

@@ -9,6 +9,7 @@ from typing import Any
 
 from rich.text import Text
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, RichLog, Static
 
@@ -26,7 +27,7 @@ class SyncScreen(Screen):
     """
 
     TITLE = "TubeVault"
-    BINDINGS = [("escape", "back", "Back (sync continues)")]
+    BINDINGS = [Binding("escape", "back", "Back (sync continues)", priority=True)]
 
     def __init__(
         self,
