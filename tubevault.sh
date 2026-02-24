@@ -19,5 +19,13 @@ if [ ! -f "$MARKER" ] || [ "$SCRIPT_DIR/requirements.txt" -nt "$MARKER" ]; then
   touch "$MARKER"
 fi
 
+# Load Anthropic API key from credentials file
+CREDENTIALS="$SCRIPT_DIR/credentials"
+if [ -f "$CREDENTIALS" ]; then
+  export ANTHROPIC_API_KEY="$(tr -d '[:space:]' < "$CREDENTIALS")"
+else
+  echo "Warning: credentials file not found at $CREDENTIALS" >&2
+fi
+
 # Run TubeVault, passing through any CLI arguments
 exec "$VENV_DIR/bin/python" -m tubevault "$@"
