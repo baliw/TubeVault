@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import warnings
 from typing import Any
 
 from rich.text import Text
@@ -68,14 +69,32 @@ class SyncScreen(Screen):
             if panel.is_mounted:
                 loop.call_soon_threadsafe(panel.update_progress, prog)
 
-        # Redirect stdout and stderr to /dev/null for the entire sync.
-        # yt-dlp, ffmpeg, and other libraries may write stray bytes
-        # (blank lines, warnings) that corrupt the Textual terminal even
-        # with quiet=True. Textual renders via its own internal writer and
-        # is unaffected by redirecting sys.stdout/sys.stderr.
+        # Suppress all output that could corrupt the Textual terminal:
+        #
+        # Layer 1 — Python level: contextlib.redirect_* covers any Python
+        #   code that writes via sys.stdout / sys.stderr.
+        #
+        # Layer 2 — OS fd level: os.dup2 covers native subprocesses (ffmpeg,
+        #   etc.) that yt-dlp forks.  Those processes inherit file descriptor
+        #   2 (stderr) from the parent and write directly at the OS level,
+        #   completely bypassing Python's sys.stderr object.  We save fd 2,
+        #   point it at /dev/null for the duration of the sync, then restore.
+        #
+        # We intentionally leave fd 1 (stdout) alone because Textual's
+        # terminal driver writes there for screen rendering.
+        saved_stderr_fd = os.dup(2)
+        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull_fd, 2)
+        os.close(devnull_fd)
+
         devnull = open(os.devnull, "w")
         try:
-            with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+            with (
+                contextlib.redirect_stdout(devnull),
+                contextlib.redirect_stderr(devnull),
+                warnings.catch_warnings(),
+            ):
+                warnings.simplefilter("ignore")
                 if self._channel_name and self._channel_url:
                     from tubevault.core.config import load_config
                     config = load_config()
@@ -99,6 +118,9 @@ class SyncScreen(Screen):
             loop.call_soon_threadsafe(log.write, Text(f"ERROR: {exc}"))
         finally:
             devnull.close()
+            # Restore stderr fd so logging works normally after sync.
+            os.dup2(saved_stderr_fd, 2)
+            os.close(saved_stderr_fd)
 
     def action_back(self) -> None:
         self.app.pop_screen()
