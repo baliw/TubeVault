@@ -39,10 +39,6 @@ class ProgressPanel(Widget):
     ProgressPanel .status-row {
         color: $text-muted;
     }
-    ProgressPanel .retry-wait {
-        color: $warning;
-        text-style: bold;
-    }
     """
 
     def __init__(self, channel_name: str = "", **kwargs: Any) -> None:
@@ -56,7 +52,6 @@ class ProgressPanel(Widget):
         yield Label("", id="video_title_label", classes="video-title")
         yield ProgressBar(total=100, id="download_bar", show_eta=False)
         yield Label("", id="status_label", classes="status-row")
-        yield Label("", id="retry_label", classes="retry-wait")
 
     def update_progress(self, prog: ChannelSyncProgress) -> None:
         """Update the panel with new progress state.
@@ -79,7 +74,6 @@ class ProgressPanel(Widget):
         download_bar = self.query_one("#download_bar", ProgressBar)
         status_label = self.query_one("#status_label", Label)
 
-        retry_label = self.query_one("#retry_label", Label)
         if prog.done:
             if prog.error:
                 video_label.update(f"Error: {prog.error}")
@@ -87,7 +81,6 @@ class ProgressPanel(Widget):
                 video_label.update("Sync complete.")
             download_bar.update(progress=100)
             status_label.update("")
-            retry_label.update("")
             return
 
         vp = prog.current_video
@@ -120,8 +113,3 @@ class ProgressPanel(Widget):
         text.append(f"Transcript {t_icon}  ", style="green" if vp.transcript == "done" else "yellow")
         text.append(f"Summary {s_icon}", style="green" if vp.summary == "done" else "yellow")
         status_label.update(text)
-
-        if prog.retry_countdown > 0:
-            retry_label.update(Text(f"⏳ {prog.retry_message}", style="bold orange1"))
-        else:
-            retry_label.update("")

@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from rich.text import Text
-
 from tubevault.core.config import load_config
 from tubevault.core.database import (
     load_library,
@@ -178,8 +176,13 @@ async def _process_video(
 
             # Always pause between requests regardless of outcome.
             for remaining in range(INTER_REQUEST_DELAY, 0, -1):
-                _log(log_callback, Text(f"  ⏸ next request in {remaining}s", style="dim cyan"))
+                prog.retry_countdown = remaining
+                prog.retry_message = f"⏸ Next request in {remaining}s"
+                _emit(callback, prog)
                 await asyncio.sleep(1)
+            prog.retry_countdown = 0
+            prog.retry_message = ""
+            _emit(callback, prog)
 
             if not failed:
                 break
@@ -187,12 +190,12 @@ async def _process_video(
             # Compute how long to wait before retrying.
             delay = DOWNLOAD_RETRY_DELAYS[min(attempt, len(DOWNLOAD_RETRY_DELAYS) - 1)]
             attempt += 1
+            _log(log_callback, f"Download failed — retrying in {delay}s (attempt {attempt + 1})…")
 
             for remaining in range(delay, 0, -1):
                 prog.retry_countdown = remaining
-                prog.retry_message = f"Download failed — retrying in {remaining}s"
+                prog.retry_message = f"⏳ Retrying in {remaining}s"
                 _emit(callback, prog)
-                _log(log_callback, Text(f"  ⏳ retrying in {remaining}s", style="bold orange1"))
                 await asyncio.sleep(1)
 
             prog.retry_countdown = 0

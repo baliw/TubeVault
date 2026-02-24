@@ -43,6 +43,7 @@ class SyncScreen(Screen):
         yield Header(show_clock=True)
         yield Label("Press Escape to return; sync continues in background.", id="sync_hint")
         yield ProgressPanel(channel_name=self._channel_name or "", id="progress_panel")
+        yield Label("", id="countdown_label")
         yield RichLog(
             highlight=False,
             markup=False,
@@ -62,6 +63,11 @@ class SyncScreen(Screen):
         # Show the latest progress snapshot.
         if self.app.sync_progress is not None:
             panel.update_progress(self.app.sync_progress)
+            lbl = self.query_one("#countdown_label", Label)
+            p = self.app.sync_progress
+            if p.retry_countdown > 0:
+                style = "bold orange1" if p.retry_message.startswith("⏳") else "dim cyan"
+                lbl.update(Text(p.retry_message, style=style))
 
         # Only start a new sync if one is not already running.
         if not self.app.sync_running:
@@ -136,6 +142,13 @@ class SyncScreen(Screen):
                     panel = screen.query_one("#progress_panel", ProgressPanel)
                     if panel.is_mounted:
                         panel.update_progress(prog)
+                    lbl = screen.query_one("#countdown_label", Label)
+                    if lbl.is_mounted:
+                        if prog.retry_countdown > 0:
+                            style = "bold orange1" if prog.retry_message.startswith("⏳") else "dim cyan"
+                            lbl.update(Text(prog.retry_message, style=style))
+                        else:
+                            lbl.update("")
                 except Exception:
                     pass
                 return
@@ -155,7 +168,12 @@ class SyncScreen(Screen):
     #progress_panel {
         width: 100%;
         height: auto;
-        margin-bottom: 1;
+        margin-bottom: 0;
+    }
+    #countdown_label {
+        width: 100%;
+        height: 1;
+        margin-bottom: 0;
     }
     #output_log {
         width: 100%;
