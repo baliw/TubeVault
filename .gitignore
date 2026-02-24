@@ -24,6 +24,11 @@ env/
 .coverage
 htmlcov/
 
+# Credentials
+credentials
+credentials/
+credentials.*
+
 # macOS
 .DS_Store
 
