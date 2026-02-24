@@ -1,7 +1,9 @@
 """Synchronization progress screen."""
 
 import asyncio
+import contextlib
 import logging
+import os
 from typing import Any
 
 from rich.text import Text
@@ -66,28 +68,37 @@ class SyncScreen(Screen):
             if panel.is_mounted:
                 loop.call_soon_threadsafe(panel.update_progress, prog)
 
+        # Redirect stdout and stderr to /dev/null for the entire sync.
+        # yt-dlp, ffmpeg, and other libraries may write stray bytes
+        # (blank lines, warnings) that corrupt the Textual terminal even
+        # with quiet=True. Textual renders via its own internal writer and
+        # is unaffected by redirecting sys.stdout/sys.stderr.
+        devnull = open(os.devnull, "w")
         try:
-            if self._channel_name and self._channel_url:
-                from tubevault.core.config import load_config
-                config = load_config()
-                quality = config.get("download_quality", "1080p")
-                max_concurrent = config.get("max_concurrent_downloads", 2)
-                await sync_channel(
-                    channel_name=self._channel_name,
-                    channel_url=self._channel_url,
-                    quality=quality,
-                    max_concurrent=max_concurrent,
-                    progress_callback=_progress_callback,
-                    log_callback=_write_log,
-                )
-            else:
-                await sync_all_channels(
-                    progress_callback=_progress_callback,
-                    log_callback=_write_log,
-                )
+            with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+                if self._channel_name and self._channel_url:
+                    from tubevault.core.config import load_config
+                    config = load_config()
+                    quality = config.get("download_quality", "1080p")
+                    max_concurrent = config.get("max_concurrent_downloads", 2)
+                    await sync_channel(
+                        channel_name=self._channel_name,
+                        channel_url=self._channel_url,
+                        quality=quality,
+                        max_concurrent=max_concurrent,
+                        progress_callback=_progress_callback,
+                        log_callback=_write_log,
+                    )
+                else:
+                    await sync_all_channels(
+                        progress_callback=_progress_callback,
+                        log_callback=_write_log,
+                    )
         except Exception as exc:
             logger.error("Sync error: %s", exc)
             loop.call_soon_threadsafe(log.write, Text(f"ERROR: {exc}"))
+        finally:
+            devnull.close()
 
     def action_back(self) -> None:
         self.app.pop_screen()
