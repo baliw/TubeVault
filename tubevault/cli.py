@@ -8,11 +8,10 @@ from typing import Any
 
 import click
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    stream=sys.stderr,
-)
+# Do NOT configure logging here at module level — it would write to stderr
+# and corrupt the Textual terminal when running in TUI mode.
+# Headless modes (--sync, --export) configure logging themselves.
+logging.getLogger().addHandler(logging.NullHandler())
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +35,8 @@ def main(
 
     Run without flags to launch the TUI.
     """
-    if verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+    if sync or do_export:
+        _configure_headless_logging(verbose)
 
     if sync:
         _run_sync(channel)
@@ -45,6 +44,14 @@ def main(
         _run_export(channel, output, master_summary)
     else:
         _run_tui()
+
+
+def _configure_headless_logging(verbose: bool) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
 
 
 def _run_sync(channel: str | None) -> None:
