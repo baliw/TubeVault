@@ -39,6 +39,13 @@ class TubeVaultApp(App):
         Binding("ctrl+q", "quit", "Quit", show=False, priority=True),
     ]
 
+    # ------------------------------------------------------------------ Sync state
+    # These survive SyncScreen being popped so progress can be replayed
+    # when the user navigates back to the sync view.
+    sync_running: bool = False
+    sync_logs: list[str] = []
+    sync_progress: Any = None  # ChannelSyncProgress | None
+
     def on_mount(self) -> None:
         self.push_screen(ChannelSelectScreen())
 
