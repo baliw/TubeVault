@@ -21,6 +21,10 @@ Screen {
 HeaderIcon {
     display: none;
 }
+HeaderTitle {
+    content-align: left middle;
+    padding: 0 1;
+}
 """
 
 
