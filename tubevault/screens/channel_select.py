@@ -5,22 +5,35 @@ from typing import Any
 
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.screen import Screen
-from textual.containers import Vertical
-from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Static
+from textual.widgets import Button, Header, Input, Label, ListItem, ListView, Static
 
 from tubevault.core.config import add_channel, load_config, remove_channel
 
 logger = logging.getLogger(__name__)
 
 
+class _ChannelList(ListView):
+    """ListView that moves focus to the action bar when UP is pressed at index 0."""
+
+    def action_cursor_up(self) -> None:
+        if self.index == 0 or self.index is None:
+            # At the top — hand off focus to the first action button.
+            self.screen.query_one("#btn_add", Button).focus()
+        else:
+            super().action_cursor_up()
+
+
 class ChannelSelectScreen(Screen):
     """Startup screen: list channels, add/remove, sync all.
 
-    Keybindings:
-        ↑↓     — navigate channel list
-        Enter  — select channel
+    Navigation:
+        ↑↓     — navigate channel list; ↑ at top moves to action bar
+        ←→     — navigate action buttons
+        ↓      — from action bar, return to channel list
+        Enter  — select channel / activate button
         a      — add new channel
         r      — remove selected channel
         s      — synchronize all channels
@@ -51,17 +64,20 @@ class ChannelSelectScreen(Screen):
         yield Header(show_clock=True)
         with Vertical(id="center_panel"):
             yield Static("TubeVault", id="app_title")
-            yield Static("Select a channel  [a] Add  [r] Remove  [s] Sync All  [q] Quit", id="instructions")
-            yield ListView(id="channel_list")
+            with Horizontal(id="action_bar"):
+                yield Button("Add", id="btn_add")
+                yield Button("Remove", id="btn_remove")
+                yield Button("Sync All", id="btn_sync")
+                yield Button("Quit", id="btn_quit", variant="error")
+            yield _ChannelList(id="channel_list")
             yield Label("", id="status_label")
-        yield Footer()
 
     def on_mount(self) -> None:
         self._refresh_list()
 
     def _refresh_list(self) -> None:
         config = load_config()
-        lv: ListView = self.query_one("#channel_list", ListView)
+        lv = self.query_one("#channel_list", _ChannelList)
         lv.clear()
         channels = config.get("channels", [])
         for ch in channels:
@@ -69,19 +85,51 @@ class ChannelSelectScreen(Screen):
             url = ch.get("url", "")
             lv.append(ListItem(Label(f"{name}  [dim]{url}[/dim]"), id=f"ch_{name}"))
         if not channels:
-            lv.append(ListItem(Label("[dim]No channels configured. Press [bold]a[/bold] to add one.[/dim]")))
-        # Defer focus until after Textual finishes processing the DOM mutations
-        # from clear() + append(). Calling focus() synchronously here loses the
-        # focus when Textual processes the pending mount operations.
+            lv.append(ListItem(Label("[dim]No channels yet — press [bold]a[/bold] to add one.[/dim]")))
         self.call_after_refresh(lv.focus)
 
+    # ------------------------------------------------------------------ Key nav
+    def on_key(self, event) -> None:
+        """Handle arrow-key navigation between action buttons and channel list."""
+        focused = self.focused
+        if not isinstance(focused, Button):
+            return
+        buttons = list(self.query("#action_bar > Button"))
+        if event.key == "down":
+            event.stop()
+            self.query_one("#channel_list", _ChannelList).focus()
+        elif event.key == "right":
+            event.stop()
+            idx = buttons.index(focused)
+            if idx < len(buttons) - 1:
+                buttons[idx + 1].focus()
+        elif event.key == "left":
+            event.stop()
+            idx = buttons.index(focused)
+            if idx > 0:
+                buttons[idx - 1].focus()
+
+    # ------------------------------------------------------------------ Button actions
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id
+        if btn_id == "btn_add":
+            self.action_add_channel()
+        elif btn_id == "btn_remove":
+            self.action_remove_channel()
+        elif btn_id == "btn_sync":
+            self.action_sync_all()
+        elif btn_id == "btn_quit":
+            self.app.action_quit()
+
+    # ------------------------------------------------------------------ ListView
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         config = load_config()
         channels = config.get("channels", [])
-        idx = self.query_one("#channel_list", ListView).index
+        idx = self.query_one("#channel_list", _ChannelList).index
         if idx is not None and idx < len(channels):
             self.post_message(self.ChannelSelected(channels[idx]))
 
+    # ------------------------------------------------------------------ Channel management
     def action_add_channel(self) -> None:
         self.app.push_screen(AddChannelScreen(), self._on_channel_added)
 
@@ -95,12 +143,15 @@ class ChannelSelectScreen(Screen):
     def action_remove_channel(self) -> None:
         config = load_config()
         channels = config.get("channels", [])
-        lv = self.query_one("#channel_list", ListView)
+        lv = self.query_one("#channel_list", _ChannelList)
         idx = lv.index
         if idx is None or idx >= len(channels):
             return
         ch = channels[idx]
-        self.app.push_screen(ConfirmScreen(f"Remove channel '{ch['name']}'?"), lambda ok: self._do_remove(ok, ch["name"]))
+        self.app.push_screen(
+            ConfirmScreen(f"Remove channel '{ch['name']}'?"),
+            lambda ok: self._do_remove(ok, ch["name"]),
+        )
 
     def _do_remove(self, confirmed: bool, name: str) -> None:
         if confirmed:
@@ -127,11 +178,14 @@ class ChannelSelectScreen(Screen):
         padding: 1 0;
         width: 100%;
     }
-    #instructions {
-        text-align: center;
-        color: $text-muted;
-        margin-bottom: 1;
+    #action_bar {
         width: 100%;
+        height: auto;
+        margin-bottom: 1;
+    }
+    #action_bar > Button {
+        margin-right: 1;
+        min-width: 12;
     }
     #channel_list {
         width: 100%;
