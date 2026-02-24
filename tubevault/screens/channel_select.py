@@ -69,6 +69,7 @@ class ChannelSelectScreen(Screen):
             lv.append(ListItem(Label(f"{name}  [dim]{url}[/dim]"), id=f"ch_{name}"))
         if not channels:
             lv.append(ListItem(Label("[dim]No channels configured. Press [bold]a[/bold] to add one.[/dim]")))
+        lv.focus()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         config = load_config()
