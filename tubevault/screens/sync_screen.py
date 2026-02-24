@@ -71,10 +71,21 @@ class SyncScreen(Screen):
             if panel.is_mounted:
                 app.call_from_thread(panel.update_progress, prog)
 
-        # Suppress Python-level stdout/stderr from yt-dlp and libraries.
-        # We do NOT redirect fd 2 at the OS level because Textual 8's
-        # terminal driver writes all screen rendering directly to fd 2
-        # (sys.__stderr__), so redirecting it would blank the entire UI.
+        # Suppress all output that could corrupt the Textual terminal.
+        #
+        # Layer 1 — Python level: contextlib.redirect_* covers Python code
+        #   writing via sys.stdout / sys.stderr.
+        #
+        # Layer 2 — OS fd level: os.dup2 covers native subprocesses (ffmpeg)
+        #   that yt-dlp forks to merge video+audio.  Those processes inherit
+        #   fd 2 (stderr) and write directly at the OS level, bypassing
+        #   Python's sys.stderr entirely.  Textual renders via fd 1 (stdout),
+        #   so redirecting fd 2 is safe.
+        saved_stderr_fd = os.dup(2)
+        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull_fd, 2)
+        os.close(devnull_fd)
+
         devnull = open(os.devnull, "w")
         try:
             with (
@@ -106,6 +117,9 @@ class SyncScreen(Screen):
             app.call_from_thread(log.write, Text(f"ERROR: {exc}"))
         finally:
             devnull.close()
+            # Restore stderr fd so logging works normally after sync.
+            os.dup2(saved_stderr_fd, 2)
+            os.close(saved_stderr_fd)
 
     def action_back(self) -> None:
         self.app.pop_screen()
