@@ -18,6 +18,9 @@ APP_CSS = """
 Screen {
     background: $background;
 }
+HeaderIcon {
+    display: none;
+}
 """
 
 
@@ -25,6 +28,7 @@ class TubeVaultApp(App):
     """TubeVault — YouTube video library manager with AI summaries."""
 
     TITLE = "TubeVault"
+    ENABLE_COMMAND_PALETTE = False
     CSS = APP_CSS
 
     BINDINGS = [
