@@ -106,7 +106,7 @@ class SyncScreen(Screen):
 
     DEFAULT_CSS = """
     SyncScreen {
-        padding: 1 2;
+        padding: 0 2;
         layout: vertical;
     }
     #sync_hint {
