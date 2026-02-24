@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import yt_dlp
+from yt_dlp.utils import ImpersonateTarget
 
 from tubevault.core.database import video_dir
 from tubevault.utils.helpers import ensure_dir
@@ -78,6 +79,7 @@ def _ydl_opts_base(
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
+        "impersonate": ImpersonateTarget(),
     }
     if log_callback:
         opts["logger"] = _YdlLogger(log_callback)
@@ -144,6 +146,7 @@ def _fetch_channel_videos_sync(
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
+        "impersonate": ImpersonateTarget(),
     }
     if log_callback:
         opts["logger"] = _YdlLogger(log_callback)
