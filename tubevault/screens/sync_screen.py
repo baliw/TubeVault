@@ -1,8 +1,8 @@
 """Synchronization progress screen."""
 
-import contextlib
+import asyncio
+import contextvars
 import logging
-import os
 import warnings
 from typing import Any
 
@@ -54,46 +54,31 @@ class SyncScreen(Screen):
         self.run_worker(self._run_sync(), exclusive=False)
 
     async def _run_sync(self) -> None:
-        # Cache widget references NOW (main async context).
-        # Callbacks may be invoked from executor threads.
+        # Cache widget references and event loop in the main async context.
+        # Callbacks may be invoked from executor threads OR directly from
+        # the async event loop (e.g. via sync.py's _log helper).
         panel: ProgressPanel = self.query_one("#progress_panel", ProgressPanel)
         log: RichLog = self.query_one("#output_log", RichLog)
-        app = self.app
+        loop = asyncio.get_running_loop()
+        # Capture the current contextvars snapshot (includes Textual's
+        # active_app ContextVar).  ctx.run() restores it before each call,
+        # so RichLog/ProgressPanel can resolve self.app regardless of whether
+        # the callback is invoked from a thread or from the event loop.
+        # call_soon_threadsafe is non-blocking unlike call_from_thread, so
+        # it is safe to call from the event loop thread without deadlocking.
+        ctx = contextvars.copy_context()
 
-        # Textual 8 uses call_from_thread() for thread-safe widget updates.
-        # It propagates the active_app ContextVar correctly, unlike
-        # loop.call_soon_threadsafe() which does not carry ContextVars.
         def _write_log(msg: str) -> None:
             if log.is_mounted:
-                app.call_from_thread(log.write, Text(msg))
+                loop.call_soon_threadsafe(ctx.run, log.write, Text(msg))
 
         def _progress_callback(prog: ChannelSyncProgress) -> None:
             if panel.is_mounted:
-                app.call_from_thread(panel.update_progress, prog)
+                loop.call_soon_threadsafe(ctx.run, panel.update_progress, prog)
 
-        # Suppress all output that could corrupt the Textual terminal.
-        #
-        # Layer 1 — Python level: contextlib.redirect_* covers Python code
-        #   writing via sys.stdout / sys.stderr.
-        #
-        # Layer 2 — OS fd level: os.dup2 covers native subprocesses (ffmpeg)
-        #   that yt-dlp forks to merge video+audio.  Those processes inherit
-        #   fd 2 (stderr) and write directly at the OS level, bypassing
-        #   Python's sys.stderr entirely.  Textual renders via fd 1 (stdout),
-        #   so redirecting fd 2 is safe.
-        saved_stderr_fd = os.dup(2)
-        devnull_fd = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull_fd, 2)
-        os.close(devnull_fd)
-
-        devnull = open(os.devnull, "w")
-        try:
-            with (
-                contextlib.redirect_stdout(devnull),
-                contextlib.redirect_stderr(devnull),
-                warnings.catch_warnings(),
-            ):
-                warnings.simplefilter("ignore")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
                 if self._channel_name and self._channel_url:
                     from tubevault.core.config import load_config
                     config = load_config()
@@ -112,14 +97,9 @@ class SyncScreen(Screen):
                         progress_callback=_progress_callback,
                         log_callback=_write_log,
                     )
-        except Exception as exc:
-            logger.error("Sync error: %s", exc)
-            app.call_from_thread(log.write, Text(f"ERROR: {exc}"))
-        finally:
-            devnull.close()
-            # Restore stderr fd so logging works normally after sync.
-            os.dup2(saved_stderr_fd, 2)
-            os.close(saved_stderr_fd)
+            except Exception as exc:
+                logger.error("Sync error: %s", exc)
+                loop.call_soon_threadsafe(ctx.run, log.write, Text(f"ERROR: {exc}"))
 
     def action_back(self) -> None:
         self.app.pop_screen()
