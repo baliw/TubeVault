@@ -7,7 +7,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
-from textual.screen import Screen
+from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, Header, Input, Label, ListItem, ListView, Static
 
 from tubevault.core.config import add_channel, load_config, remove_channel
@@ -68,7 +68,7 @@ class ChannelSelectScreen(Screen):
                 yield Button("Add", id="btn_add")
                 yield Button("Remove", id="btn_remove")
                 yield Button("Sync All", id="btn_sync")
-                yield Button("Quit", id="btn_quit", variant="error")
+                yield Button("Quit", id="btn_quit")
             yield _ChannelList(id="channel_list")
             yield Label("", id="status_label")
 
@@ -182,6 +182,7 @@ class ChannelSelectScreen(Screen):
         width: 100%;
         height: auto;
         margin-bottom: 1;
+        align: center middle;
     }
     #action_bar > Button {
         margin-right: 1;
@@ -201,19 +202,24 @@ class ChannelSelectScreen(Screen):
     """
 
 
-class AddChannelScreen(Screen):
-    """Modal screen for entering a new channel URL and name."""
+class AddChannelScreen(ModalScreen):
+    """Modal overlay for entering a new channel URL and name."""
 
     BINDINGS = [("escape", "cancel", "Cancel")]
 
     def compose(self) -> ComposeResult:
-        yield Static("Add Channel", id="modal_title")
-        yield Label("YouTube channel URL or @handle:")
-        yield Input(placeholder="https://www.youtube.com/@channel or @handle", id="url_input")
-        yield Label("Display name (slug, no spaces):")
-        yield Input(placeholder="my_channel", id="name_input")
-        yield Button("Add", id="add_btn", variant="primary")
-        yield Button("Cancel", id="cancel_btn")
+        with Vertical(id="dialog"):
+            yield Static("Add Channel", id="modal_title")
+            yield Label("YouTube channel URL or @handle:")
+            yield Input(placeholder="https://www.youtube.com/@channel or @handle", id="url_input")
+            yield Label("Display name (slug, no spaces):")
+            yield Input(placeholder="my_channel", id="name_input")
+            with Horizontal(id="btn_row"):
+                yield Button("Add", id="add_btn", variant="primary")
+                yield Button("Cancel", id="cancel_btn")
+
+    def on_mount(self) -> None:
+        self.query_one("#url_input", Input).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "add_btn":
@@ -233,19 +239,34 @@ class AddChannelScreen(Screen):
     AddChannelScreen {
         align: center middle;
     }
-    AddChannelScreen > * {
-        width: 70;
+    #dialog {
+        width: 72;
+        height: auto;
+        background: $panel;
+        border: solid $accent;
+        padding: 1 2;
+    }
+    #dialog > Label, #dialog > Input, #dialog > Static {
         margin-bottom: 1;
+        width: 100%;
     }
     #modal_title {
         text-style: bold;
         color: $accent;
     }
+    #btn_row {
+        margin-top: 1;
+        align: right middle;
+        height: auto;
+    }
+    #btn_row > Button {
+        margin-left: 1;
+    }
     """
 
 
-class ConfirmScreen(Screen):
-    """A simple yes/no confirmation modal."""
+class ConfirmScreen(ModalScreen):
+    """A simple yes/no confirmation modal overlay."""
 
     BINDINGS = [("escape", "no", "No")]
 
@@ -254,9 +275,11 @@ class ConfirmScreen(Screen):
         self._prompt = prompt
 
     def compose(self) -> ComposeResult:
-        yield Static(self._prompt, id="confirm_prompt")
-        yield Button("Yes", id="yes_btn", variant="error")
-        yield Button("No", id="no_btn")
+        with Vertical(id="dialog"):
+            yield Static(self._prompt, id="confirm_prompt")
+            with Horizontal(id="btn_row"):
+                yield Button("Yes", id="yes_btn", variant="error")
+                yield Button("No", id="no_btn")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "yes_btn")
@@ -268,12 +291,24 @@ class ConfirmScreen(Screen):
     ConfirmScreen {
         align: center middle;
     }
-    ConfirmScreen > * {
-        width: 50;
-        margin-bottom: 1;
+    #dialog {
+        width: 52;
+        height: auto;
+        background: $panel;
+        border: solid $accent;
+        padding: 1 2;
     }
     #confirm_prompt {
         text-style: bold;
         text-align: center;
+        margin-bottom: 1;
+        width: 100%;
+    }
+    #btn_row {
+        align: center middle;
+        height: auto;
+    }
+    #btn_row > Button {
+        margin-right: 1;
     }
     """
