@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ title }} — TubeVault</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #111;
+    color: #ddd;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    padding: 1rem;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 0.75rem; color: #fff; }
+  h2 { font-size: 1.15rem; margin: 1.5rem 0 0.5rem; color: #eee; border-bottom: 1px solid #333; padding-bottom: 0.25rem; }
+  .video-container {
+    width: 100%;
+    max-width: 960px;
+    margin: 0 auto 1.5rem;
+  }
+  #player {
+    width: 100%;
+    max-height: 540px;
+    background: #000;
+    display: block;
+    border-radius: 4px;
+  }
+  .no-video {
+    background: #222;
+    border: 1px dashed #555;
+    border-radius: 4px;
+    padding: 2rem;
+    text-align: center;
+    color: #888;
+    font-size: 0.9rem;
+  }
+  .content {
+    max-width: 960px;
+    margin: 0 auto;
+  }
+  .summary-text {
+    color: #ccc;
+    margin-bottom: 1rem;
+  }
+  .summary-text p { margin-bottom: 0.75rem; }
+  .points-list {
+    list-style: none;
+    padding: 0;
+  }
+  .points-list li {
+    margin-bottom: 0.6rem;
+    padding: 0.5rem 0.75rem;
+    border-left: 3px solid #444;
+    background: #1a1a1a;
+    border-radius: 0 4px 4px 0;
+  }
+  .points-list li:hover { border-left-color: #4a9eff; background: #1e2a3a; }
+  .ts-link {
+    display: inline-block;
+    background: #2a4a6a;
+    color: #7ac fff;
+    color: #7abfff;
+    text-decoration: none;
+    padding: 0.1rem 0.45rem;
+    border-radius: 3px;
+    font-size: 0.85rem;
+    font-family: monospace;
+    margin-right: 0.5rem;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .ts-link:hover { background: #3a6a9a; }
+  .point-text { font-weight: 500; color: #ddd; }
+  .point-detail { display: block; margin-top: 0.25rem; font-size: 0.875rem; color: #aaa; }
+  .no-summary { color: #777; font-style: italic; }
+</style>
+</head>
+<body>
+<div class="video-container">
+  <h1>{{ title }}</h1>
+  {% if has_video and video_uri %}
+  <video id="player" controls>
+    <source src="{{ video_uri }}" type="video/mp4">
+    Your browser does not support the video tag.
+  </video>
+  {% else %}
+  <div class="no-video">Video file not downloaded yet.</div>
+  {% endif %}
+</div>
+
+<div class="content">
+  {% if summary_text %}
+  <h2>Summary</h2>
+  <div class="summary-text">
+    {% for paragraph in summary_text.split('\n\n') %}
+    <p>{{ paragraph }}</p>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if main_points %}
+  <h2>Key Points</h2>
+  <ul class="points-list">
+    {% for point in main_points %}
+    <li>
+      <a class="ts-link" href="#" onclick="seekTo({{ point.start_time_seconds }}); return false;">[{{ point.timestamp }}]</a>
+      <span class="point-text">{{ point.point }}</span>
+      {% if point.detail %}
+      <span class="point-detail">{{ point.detail }}</span>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% elif not summary_text %}
+  <p class="no-summary">No summary available for this video.</p>
+  {% endif %}
+</div>
+
+<script>
+function seekTo(seconds) {
+  var player = document.getElementById('player');
+  if (player) {
+    player.currentTime = seconds;
+    player.play();
+  }
+}
+</script>
+</body>
+</html>
