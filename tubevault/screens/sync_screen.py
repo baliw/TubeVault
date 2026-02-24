@@ -59,10 +59,12 @@ class SyncScreen(Screen):
         loop = asyncio.get_running_loop()
 
         def _write_log(msg: str) -> None:
-            loop.call_soon_threadsafe(log.write, Text(msg))
+            if log.is_mounted:
+                loop.call_soon_threadsafe(log.write, Text(msg))
 
         def _progress_callback(prog: ChannelSyncProgress) -> None:
-            loop.call_soon_threadsafe(panel.update_progress, prog)
+            if panel.is_mounted:
+                loop.call_soon_threadsafe(panel.update_progress, prog)
 
         try:
             if self._channel_name and self._channel_url:

@@ -63,7 +63,7 @@ class ProgressPanel(Widget):
         self._refresh_display()
 
     def _refresh_display(self) -> None:
-        if not self._prog:
+        if not self._prog or not self.is_mounted:
             return
         prog = self._prog
 
