@@ -13,9 +13,6 @@ from tubevault.utils.helpers import ensure_dir
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRIES = 3
-RETRY_BASE_DELAY = 2.0  # seconds; exponential backoff
-
 LogCallback = Callable[[str], None]
 
 # yt-dlp debug lines that are just download progress noise (handled by the
@@ -74,8 +71,8 @@ def _ydl_opts_base(
         "merge_output_format": "mp4",
         "outtmpl": str(output_dir / "video.%(ext)s"),
         "ignoreerrors": False,
-        "retries": MAX_RETRIES,
-        "fragment_retries": MAX_RETRIES,
+        "retries": 0,
+        "fragment_retries": 0,
         # Always suppress direct terminal writes; the custom logger handles
         # all message output independently of these flags.
         "quiet": True,
@@ -218,32 +215,9 @@ async def download_video(
     ensure_dir(out_dir)
 
     loop = asyncio.get_running_loop()
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            result = await loop.run_in_executor(
-                None,
-                _download_sync,
-                url,
-                out_dir,
-                quality,
-                progress_callback,
-                log_callback,
-            )
-            if result:
-                return result
-        except Exception as exc:
-            msg = f"Download attempt {attempt}/{MAX_RETRIES} failed for {video_id}: {exc}"
-            logger.warning(msg)
-            if log_callback:
-                log_callback(msg)
-            if attempt < MAX_RETRIES:
-                await asyncio.sleep(RETRY_BASE_DELAY ** attempt)
-
-    msg = f"All download attempts failed for {video_id}"
-    logger.error(msg)
-    if log_callback:
-        log_callback(msg)
-    return None
+    return await loop.run_in_executor(
+        None, _download_sync, url, out_dir, quality, progress_callback, log_callback
+    )
 
 
 def _download_sync(

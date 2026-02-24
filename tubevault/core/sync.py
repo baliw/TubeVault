@@ -21,6 +21,13 @@ from tubevault.core.transcript import fetch_transcript
 
 logger = logging.getLogger(__name__)
 
+# Seconds to wait between successive download requests.
+INTER_REQUEST_DELAY = 10
+
+# Retry wait schedule (seconds) after each failed download attempt.
+# The last value repeats indefinitely.
+DOWNLOAD_RETRY_DELAYS = [60, 120, 180, 240, 300, 600, 1200]
+
 
 @dataclass
 class VideoProgress:
@@ -43,6 +50,8 @@ class ChannelSyncProgress:
     current_video: VideoProgress | None = None
     done: bool = False
     error: str | None = None
+    retry_countdown: int = 0   # seconds remaining in retry wait (0 = not waiting)
+    retry_message: str = ""    # human-readable retry status message
 
 
 SyncCallback = Callable[[ChannelSyncProgress], None]
@@ -109,22 +118,15 @@ async def sync_channel(
     for v in new_videos:
         upsert_video(channel_name, v)
 
-    semaphore = asyncio.Semaphore(max_concurrent)
-
-    async def _process_one(video: dict[str, Any]) -> None:
-        async with semaphore:
-            try:
-                await _process_video(
-                    channel_name, video, quality, prog, progress_callback, log_callback
-                )
-            except Exception as exc:
-                msg = f"Failed to process {video.get('video_id')}: {exc}"
-                logger.error(msg)
-                _log(log_callback, f"ERROR: {msg}")
-            prog.completed += 1
-            _emit(progress_callback, prog)
-
-    await asyncio.gather(*[_process_one(v) for v in to_process], return_exceptions=True)
+    for v in to_process:
+        try:
+            await _process_video(channel_name, v, quality, prog, progress_callback, log_callback)
+        except Exception as exc:
+            msg = f"Failed to process {v.get('video_id')}: {exc}"
+            logger.error(msg)
+            _log(log_callback, f"ERROR: {msg}")
+        prog.completed += 1
+        _emit(progress_callback, prog)
 
     mark_library_synced(channel_name)
     prog.done = True
@@ -152,13 +154,48 @@ async def _process_video(
     # --- Download ---
     if not video.get("has_video"):
         _log(log_callback, f"--- Downloading: {title} ({video_id}) ---")
-        mp4_path = await download_video(
-            channel_name,
-            video_id,
-            quality=quality,
-            progress_callback=lambda p: _update_download(vp, p, prog, callback),
-            log_callback=log_callback,
-        )
+        attempt = 0
+        mp4_path = None
+
+        while True:
+            failed = False
+            try:
+                mp4_path = await download_video(
+                    channel_name,
+                    video_id,
+                    quality=quality,
+                    progress_callback=lambda p: _update_download(vp, p, prog, callback),
+                    log_callback=log_callback,
+                )
+                if mp4_path is None:
+                    failed = True
+                    _log(log_callback, f"Download returned no file for {video_id}")
+            except Exception as exc:
+                failed = True
+                _log(log_callback, f"Download error for {video_id}: {exc}")
+
+            # Always pause between requests regardless of outcome.
+            await asyncio.sleep(INTER_REQUEST_DELAY)
+
+            if not failed:
+                break
+
+            # Compute how long to wait before retrying.
+            delay = DOWNLOAD_RETRY_DELAYS[min(attempt, len(DOWNLOAD_RETRY_DELAYS) - 1)]
+            attempt += 1
+            _log(log_callback, f"Download failed. Retrying in {delay}s (attempt {attempt + 1})…")
+
+            for remaining in range(delay, 0, -1):
+                prog.retry_countdown = remaining
+                prog.retry_message = f"Download failed — retrying in {remaining}s"
+                _emit(callback, prog)
+                await asyncio.sleep(1)
+
+            prog.retry_countdown = 0
+            prog.retry_message = ""
+            _emit(callback, prog)
+            _log(log_callback, f"Retrying download for {video_id}…")
+
         if mp4_path:
             size_mb = mp4_path.stat().st_size / (1024 * 1024)
             upsert_video(channel_name, {
