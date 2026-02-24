@@ -80,6 +80,7 @@ def _ydl_opts_base(
         "no_warnings": True,
         "noprogress": True,
         "impersonate": ImpersonateTarget(),
+        "remote_components": ["ejs:github"],
     }
     if log_callback:
         opts["logger"] = _YdlLogger(log_callback)
@@ -147,6 +148,7 @@ def _fetch_channel_videos_sync(
         "no_warnings": True,
         "noprogress": True,
         "impersonate": ImpersonateTarget(),
+        "remote_components": ["ejs:github"],
     }
     if log_callback:
         opts["logger"] = _YdlLogger(log_callback)

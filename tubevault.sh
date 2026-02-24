@@ -19,6 +19,18 @@ if [ ! -f "$MARKER" ] || [ "$SCRIPT_DIR/requirements.txt" -nt "$MARKER" ]; then
   touch "$MARKER"
 fi
 
+# Install deno if not present (required by yt-dlp for YouTube JS challenge solving)
+if ! command -v deno &>/dev/null; then
+  echo "Installing deno..."
+  if command -v brew &>/dev/null; then
+    brew install deno
+  else
+    curl -fsSL https://deno.land/install.sh | sh
+    export DENO_INSTALL="$HOME/.deno"
+    export PATH="$DENO_INSTALL/bin:$PATH"
+  fi
+fi
+
 # Load Anthropic API key from credentials file
 CREDENTIALS="$SCRIPT_DIR/credentials"
 if [ -f "$CREDENTIALS" ]; then
