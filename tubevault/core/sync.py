@@ -80,6 +80,9 @@ async def sync_channel(
     _emit(progress_callback, prog)
 
     _log(log_callback, f"=== Syncing channel: {channel_name} ===")
+    from tubevault.utils.helpers import load_proxy_url
+    proxy = load_proxy_url()
+    _log(log_callback, f"Proxy: {proxy}" if proxy else "Proxy: none")
     _log(log_callback, f"Fetching video list…")
 
     try:
