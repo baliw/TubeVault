@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from tubevault.core.database import video_dir
-from tubevault.utils.helpers import ensure_dir, load_proxy_url
+from tubevault.utils.helpers import ensure_dir, load_proxy_url, run_in_daemon_thread
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +37,7 @@ async def fetch_transcript(
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            segments = await asyncio.get_running_loop().run_in_executor(
-                None, _fetch_via_transcript_api, video_id
-            )
+            segments = await run_in_daemon_thread(_fetch_via_transcript_api, video_id)
             if segments:
                 if log_callback:
                     log_callback(f"Transcript fetched ({len(segments)} segments)")
@@ -58,9 +56,7 @@ async def fetch_transcript(
     if log_callback:
         log_callback(msg)
     try:
-        segments = await asyncio.get_running_loop().run_in_executor(
-            None, _fetch_via_ytdlp, channel_name, video_id, log_callback
-        )
+        segments = await run_in_daemon_thread(_fetch_via_ytdlp, channel_name, video_id, log_callback)
         if segments:
             if log_callback:
                 log_callback(f"Subtitles fetched via yt-dlp ({len(segments)} segments)")

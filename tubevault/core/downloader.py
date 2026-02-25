@@ -9,7 +9,7 @@ from typing import Any, Callable
 import yt_dlp
 
 from tubevault.core.database import video_dir
-from tubevault.utils.helpers import ensure_dir, load_proxy_url
+from tubevault.utils.helpers import ensure_dir, load_proxy_url, run_in_daemon_thread
 
 logger = logging.getLogger(__name__)
 
@@ -126,10 +126,7 @@ async def fetch_channel_videos(
     Returns:
         List of video info dicts.
     """
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None, _fetch_channel_videos_sync, channel_url, log_callback
-    )
+    return await run_in_daemon_thread(_fetch_channel_videos_sync, channel_url, log_callback)
 
 
 def _fetch_channel_videos_sync(
@@ -222,10 +219,7 @@ async def download_video(
     out_dir = video_dir(channel_name, video_id)
     ensure_dir(out_dir)
 
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None, _download_sync, url, out_dir, quality, progress_callback, log_callback
-    )
+    return await run_in_daemon_thread(_download_sync, url, out_dir, quality, progress_callback, log_callback)
 
 
 def _download_sync(
@@ -279,9 +273,8 @@ async def fetch_video_metadata(video_id: str) -> dict[str, Any] | None:
     """
     url = f"https://www.youtube.com/watch?v={video_id}"
     opts = {"quiet": True, "no_warnings": True, "ignoreerrors": True}
-    loop = asyncio.get_running_loop()
     try:
-        info = await loop.run_in_executor(None, _extract_info, url, opts)
+        info = await run_in_daemon_thread(_extract_info, url, opts)
     except Exception as exc:
         logger.error("Failed to fetch metadata for %s: %s", video_id, exc)
         return None

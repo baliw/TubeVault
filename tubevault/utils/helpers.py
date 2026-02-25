@@ -1,10 +1,36 @@
 """Shared utility functions for TubeVault."""
 
+import asyncio
 import logging
+import threading
 from datetime import timedelta
 from pathlib import Path
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
+
+
+async def run_in_daemon_thread(func: Callable[..., Any], *args: Any) -> Any:
+    """Run a blocking function on a daemon thread and await the result.
+
+    Unlike loop.run_in_executor(None, ...), the thread created here is a
+    daemon thread and will not block the process from exiting when the app
+    closes while a yt-dlp download or transcript fetch is in flight.
+    """
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future = loop.create_future()
+
+    def _run() -> None:
+        try:
+            result = func(*args)
+            if not fut.done():
+                loop.call_soon_threadsafe(fut.set_result, result)
+        except BaseException as exc:
+            if not fut.done():
+                loop.call_soon_threadsafe(fut.set_exception, exc)
+
+    threading.Thread(target=_run, daemon=True, name="tubevault-worker").start()
+    return await fut
 
 
 def format_duration(seconds: int) -> str:
