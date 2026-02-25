@@ -106,7 +106,6 @@ def _fetch_via_ytdlp(
 ) -> list[dict[str, Any]] | None:
     """Use yt-dlp to download subtitles and parse them."""
     import yt_dlp
-    from yt_dlp.networking.impersonate import ImpersonateTarget
     from tubevault.core.downloader import _YdlLogger
 
     out_dir = video_dir(channel_name, video_id)
@@ -123,7 +122,6 @@ def _fetch_via_ytdlp(
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
-        "impersonate": ImpersonateTarget(),
         "remote_components": ["ejs:github"],
     }
     proxy = load_proxy_url()

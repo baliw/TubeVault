@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 import yt_dlp
-from yt_dlp.networking.impersonate import ImpersonateTarget
 
 from tubevault.core.database import video_dir
 from tubevault.utils.helpers import ensure_dir, load_proxy_url
@@ -79,7 +78,6 @@ def _ydl_opts_base(
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
-        "impersonate": ImpersonateTarget(),
         "remote_components": ["ejs:github"],
     }
     proxy = load_proxy_url()
@@ -150,7 +148,6 @@ def _fetch_channel_videos_sync(
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
-        "impersonate": ImpersonateTarget(),
         "remote_components": ["ejs:github"],
     }
     proxy = load_proxy_url()
