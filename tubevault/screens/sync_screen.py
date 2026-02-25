@@ -12,7 +12,12 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, RichLog, Static
 
-from tubevault.core.sync import ChannelSyncProgress, sync_channel, sync_all_channels
+from tubevault.core.config import load_config
+from tubevault.core.sync import (
+    DOWNLOAD_RETRY_DELAYS, INTER_REQUEST_DELAY,
+    ChannelSyncProgress, sync_channel, sync_all_channels,
+)
+from tubevault.utils.helpers import load_proxy_url
 from tubevault.widgets.progress_panel import ProgressPanel
 
 logger = logging.getLogger(__name__)
@@ -42,6 +47,7 @@ class SyncScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield Label("Press Escape to return; sync continues in background.", id="sync_hint")
+        yield Label("", id="sync_config_label")
         yield ProgressPanel(channel_name=self._channel_name or "", id="progress_panel")
         yield Label("", id="countdown_label")
         yield RichLog(
@@ -53,6 +59,7 @@ class SyncScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._populate_config_label()
         log = self.query_one("#output_log", RichLog)
         panel = self.query_one("#progress_panel", ProgressPanel)
 
@@ -153,6 +160,35 @@ class SyncScreen(Screen):
                     pass
                 return
 
+    def _populate_config_label(self) -> None:
+        proxy_url = load_proxy_url()
+        config = load_config()
+        max_concurrent = config.get("max_concurrent_downloads", 2)
+
+        if proxy_url:
+            from urllib.parse import urlparse
+            p = urlparse(proxy_url)
+            proxy_display = f"{p.hostname}:{p.port}"
+            threads_display = str(max_concurrent)
+            retry_display = "none"
+            spacing_display = "none"
+        else:
+            proxy_display = "none"
+            threads_display = "1"
+            retry_display = "→".join(f"{d}s" for d in DOWNLOAD_RETRY_DELAYS)
+            spacing_display = f"{INTER_REQUEST_DELAY}s"
+
+        t = Text()
+        t.append("Proxy: ", style="dim")
+        t.append(proxy_display, style="cyan")
+        t.append("   Threads: ", style="dim")
+        t.append(threads_display, style="cyan")
+        t.append("   Failure delay: ", style="dim")
+        t.append(retry_display, style="cyan")
+        t.append("   Request spacing: ", style="dim")
+        t.append(spacing_display, style="cyan")
+        self.query_one("#sync_config_label", Label).update(t)
+
     def action_back(self) -> None:
         self.app.pop_screen()
 
@@ -163,6 +199,11 @@ class SyncScreen(Screen):
     }
     #sync_hint {
         color: $text-muted;
+        margin-bottom: 0;
+    }
+    #sync_config_label {
+        width: 100%;
+        height: 1;
         margin-bottom: 1;
     }
     #progress_panel {
