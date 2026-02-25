@@ -14,7 +14,7 @@ from textual.widgets import Footer, Header, Label, RichLog, Static
 
 from tubevault.core.config import load_config
 from tubevault.core.sync import (
-    DOWNLOAD_RETRY_DELAYS, INTER_REQUEST_DELAY,
+    INTER_REQUEST_DELAY,
     ChannelSyncProgress, sync_channel, sync_all_channels,
 )
 from tubevault.utils.helpers import load_proxy_url
@@ -170,12 +170,10 @@ class SyncScreen(Screen):
             p = urlparse(proxy_url)
             proxy_display = f"{p.hostname}:{p.port}"
             threads_display = str(max_concurrent)
-            retry_display = "none"
             spacing_display = "none"
         else:
             proxy_display = "none"
             threads_display = "1"
-            retry_display = "→".join(f"{d}s" for d in DOWNLOAD_RETRY_DELAYS)
             spacing_display = f"{INTER_REQUEST_DELAY}s"
 
         t = Text()
@@ -183,8 +181,6 @@ class SyncScreen(Screen):
         t.append(proxy_display, style="cyan")
         t.append("   Threads: ", style="dim")
         t.append(threads_display, style="cyan")
-        t.append("   Failure delay: ", style="dim")
-        t.append(retry_display, style="cyan")
         t.append("   Request spacing: ", style="dim")
         t.append(spacing_display, style="cyan")
         self.query_one("#sync_config_label", Label).update(t)
