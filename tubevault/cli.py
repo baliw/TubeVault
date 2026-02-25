@@ -64,8 +64,7 @@ def _run_sync(channel: str | None) -> None:
     max_concurrent = config.get("max_concurrent_downloads", 2)
 
     def _log_progress(prog: Any) -> None:
-        if prog.current_video:
-            vp = prog.current_video
+        for vp in prog.active_videos:
             if vp.download >= 1.0:
                 dl = "done"
             elif vp.download < 0:

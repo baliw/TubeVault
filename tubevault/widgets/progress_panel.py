@@ -2,11 +2,11 @@
 
 from typing import Any
 
+from rich.table import Table
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.reactive import reactive
 from textual.widget import Widget
-from textual.widgets import Label, ProgressBar, Static
+from textual.widgets import Label, Static
 
 from tubevault.core.sync import ChannelSyncProgress
 
@@ -14,7 +14,9 @@ from tubevault.core.sync import ChannelSyncProgress
 class ProgressPanel(Widget):
     """A panel showing sync progress for a channel.
 
-    Displays overall progress and per-video progress bars.
+    Displays overall progress and per-video progress slots arranged side by
+    side (wrapping to additional rows when more videos are active than fit
+    in one row).
     """
 
     DEFAULT_CSS = """
@@ -32,13 +34,6 @@ class ProgressPanel(Widget):
         color: $text-muted;
         margin-bottom: 1;
     }
-    ProgressPanel .video-title {
-        color: $text;
-        margin-bottom: 0;
-    }
-    ProgressPanel .status-row {
-        color: $text-muted;
-    }
     """
 
     def __init__(self, channel_name: str = "", **kwargs: Any) -> None:
@@ -49,9 +44,7 @@ class ProgressPanel(Widget):
     def compose(self) -> ComposeResult:
         yield Label("Sync Progress", classes="title")
         yield Label("", id="overall_label", classes="overall")
-        yield Label("", id="video_title_label", classes="video-title")
-        yield ProgressBar(total=100, id="download_bar", show_eta=False)
-        yield Label("", id="status_label", classes="status-row")
+        yield Static("", id="video_slots")
 
     def update_progress(self, prog: ChannelSyncProgress) -> None:
         """Update the panel with new progress state.
@@ -70,46 +63,79 @@ class ProgressPanel(Widget):
         overall = self.query_one("#overall_label", Label)
         overall.update(f"[{prog.completed}/{prog.total} videos synced]")
 
-        video_label = self.query_one("#video_title_label", Label)
-        download_bar = self.query_one("#download_bar", ProgressBar)
-        status_label = self.query_one("#status_label", Label)
+        slots = self.query_one("#video_slots", Static)
 
         if prog.done:
             if prog.error:
-                video_label.update(f"Error: {prog.error}")
+                slots.update(Text(f"Error: {prog.error}", style="red"))
             else:
-                video_label.update("Sync complete.")
-            download_bar.update(progress=100)
-            status_label.update("")
+                slots.update(Text("Sync complete.", style="green"))
             return
 
-        vp = prog.current_video
-        if not vp:
-            video_label.update("Preparing…")
+        active = prog.active_videos
+        if not active:
+            slots.update(Text("Preparing…", style="dim"))
             return
 
-        video_label.update(vp.title)
+        slots.update(self._render_slots(active))
 
-        # Download progress bar
-        dl_pct = int(vp.download * 100) if vp.download >= 0 else 0
-        download_bar.update(progress=dl_pct)
+    def _render_slots(self, active: list) -> Any:
+        """Build a Rich Table grid with one slot per active video.
 
-        # Status icons
-        def _icon(status: str | float) -> str:
+        Each slot occupies 3 lines: title, progress bar, stage icons.
+        Slots are arranged side by side and wrap to the next row when
+        there are more active videos than fit in one row.
+        """
+        try:
+            avail = max(40, self.size.width - 6)
+        except Exception:
+            avail = 76
+
+        slot_min_width = 36
+        cols = max(1, min(len(active), avail // slot_min_width))
+
+        def _icon(status: Any) -> str:
             if isinstance(status, float):
                 if status >= 1.0:
                     return "✓"
                 if status < 0:
                     return "✗"
                 return f"{int(status * 100)}%"
-            return {"done": "✓", "in_progress": "⏳", "skipped": "—", "error": "✗", "pending": "·"}.get(status, status)
+            return {
+                "done": "✓",
+                "in_progress": "⏳",
+                "skipped": "—",
+                "error": "✗",
+                "pending": "·",
+            }.get(status, status)
 
-        dl_icon = _icon(vp.download)
-        t_icon = _icon(vp.transcript)
-        s_icon = _icon(vp.summary)
+        def _bar(pct: int, width: int = 14) -> str:
+            filled = int(pct / 100 * width)
+            return "█" * filled + "░" * (width - filled) + f" {pct:3d}%"
 
-        text = Text()
-        text.append(f"Download {dl_icon}  ", style="cyan")
-        text.append(f"Transcript {t_icon}  ", style="green" if vp.transcript == "done" else "yellow")
-        text.append(f"Summary {s_icon}", style="green" if vp.summary == "done" else "yellow")
-        status_label.update(text)
+        def _build_cell(vp: Any) -> Text:
+            title = (vp.title[:30] + "…") if len(vp.title) > 31 else vp.title
+            dl_pct = max(0, int(vp.download * 100))
+            bar = _bar(dl_pct)
+            dl_icon = _icon(vp.download)
+            t_icon = _icon(vp.transcript)
+            s_icon = _icon(vp.summary)
+            cell = Text()
+            cell.append(title + "\n", style="white")
+            cell.append(bar + "\n", style="cyan")
+            cell.append(f"DL:{dl_icon}  TR:{t_icon}  SUM:{s_icon}", style="dim")
+            return cell
+
+        table = Table.grid(expand=True, padding=(0, 1))
+        for _ in range(cols):
+            table.add_column(ratio=1)
+
+        for row_start in range(0, len(active), cols):
+            row_slots = active[row_start : row_start + cols]
+            cells: list[Any] = [_build_cell(vp) for vp in row_slots]
+            # Pad the last row with blank cells if it's short
+            while len(cells) < cols:
+                cells.append(Text(""))
+            table.add_row(*cells)
+
+        return table

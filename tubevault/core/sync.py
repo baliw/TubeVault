@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -44,7 +44,7 @@ class ChannelSyncProgress:
     channel_name: str
     total: int = 0
     completed: int = 0
-    current_video: VideoProgress | None = None
+    active_videos: list[VideoProgress] = field(default_factory=list)
     done: bool = False
     error: str | None = None
     retry_countdown: int = 0   # seconds remaining in retry wait (0 = not waiting)
@@ -128,6 +128,8 @@ async def sync_channel(
                 msg = f"Failed to process {video.get('video_id')}: {exc}"
                 logger.error(msg)
                 _log(log_callback, f"ERROR: {msg}")
+            vid_id = video.get("video_id")
+            prog.active_videos = [v for v in prog.active_videos if v.video_id != vid_id]
             prog.completed += 1
             _emit(progress_callback, prog)
 
@@ -135,7 +137,7 @@ async def sync_channel(
 
     mark_library_synced(channel_name)
     prog.done = True
-    prog.current_video = None
+    prog.active_videos.clear()
     _emit(progress_callback, prog)
     _log(log_callback, f"=== Sync complete: {len(to_process)} videos processed ===")
     logger.info("Channel %s sync complete.", channel_name)
@@ -153,7 +155,7 @@ async def _process_video(
     video_id = video["video_id"]
     title = video.get("title", video_id)
     vp = VideoProgress(video_id=video_id, title=title)
-    prog.current_video = vp
+    prog.active_videos.append(vp)
     _emit(callback, prog)
 
     # --- Download ---
