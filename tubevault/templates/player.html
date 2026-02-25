@@ -14,7 +14,8 @@
     line-height: 1.6;
     padding: 1rem;
   }
-  h1 { font-size: 1.4rem; margin-bottom: 0.75rem; color: #fff; }
+  h1 { font-size: 1.4rem; margin-bottom: 0.25rem; color: #fff; }
+  .upload-date { font-size: 0.85rem; color: #888; margin-bottom: 0.75rem; }
   h2 { font-size: 1.15rem; margin: 1.5rem 0 0.5rem; color: #eee; border-bottom: 1px solid #333; padding-bottom: 0.25rem; }
   .video-container {
     width: 100%;
@@ -77,6 +78,7 @@
 <body>
 <div class="video-container">
   <h1>{{ title }}</h1>
+  {% if upload_date %}<p class="upload-date">{{ upload_date }}</p>{% endif %}
   {% if has_video and video_uri %}
   <video id="player" controls>
     <source src="{{ video_uri }}" type="video/mp4">

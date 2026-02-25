@@ -28,6 +28,7 @@ htmlcov/
 credentials
 credentials/
 credentials.*
+proxy.conf
 
 # macOS
 .DS_Store

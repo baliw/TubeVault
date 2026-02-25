@@ -51,6 +51,33 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
+def load_proxy_url() -> str | None:
+    """Load proxy configuration from proxy.conf next to the package root.
+
+    Returns:
+        Proxy URL string in the form ``http://user:pass@host:port``,
+        or None if proxy.conf is absent or incomplete.
+    """
+    conf = Path(__file__).parent.parent.parent / "proxy.conf"
+    if not conf.exists():
+        return None
+    data: dict[str, str] = {}
+    for line in conf.read_text().splitlines():
+        line = line.strip()
+        if "=" in line:
+            key, _, val = line.partition("=")
+            data[key.strip()] = val.strip()
+    host = data.get("proxy_domain")
+    port = data.get("proxy_port")
+    user = data.get("proxy_user")
+    password = data.get("proxy_password")
+    if not (host and port):
+        return None
+    if user and password:
+        return f"http://{user}:{password}@{host}:{port}"
+    return f"http://{host}:{port}"
+
+
 def tubevault_root() -> Path:
     """Return the root TubeVault data directory.
 

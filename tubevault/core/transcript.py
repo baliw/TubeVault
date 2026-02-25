@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from tubevault.core.database import video_dir
-from tubevault.utils.helpers import ensure_dir
+from tubevault.utils.helpers import ensure_dir, load_proxy_url
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +86,14 @@ def _fetch_via_transcript_api(video_id: str) -> list[dict[str, Any]] | None:
         logger.error("youtube-transcript-api not installed")
         return None
 
+    proxy = load_proxy_url()
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+
     try:
-        segments = YouTubeTranscriptApi.get_transcript(video_id)
+        kwargs: dict[str, Any] = {}
+        if proxies:
+            kwargs["proxies"] = proxies
+        segments = YouTubeTranscriptApi.get_transcript(video_id, **kwargs)
         return [{"text": s["text"], "start": s["start"], "duration": s.get("duration", 0)} for s in segments]
     except (TranscriptsDisabled, NoTranscriptFound):
         return None
@@ -120,6 +126,9 @@ def _fetch_via_ytdlp(
         "impersonate": ImpersonateTarget(),
         "remote_components": ["ejs:github"],
     }
+    proxy = load_proxy_url()
+    if proxy:
+        opts["proxy"] = proxy
     if log_callback:
         opts["logger"] = _YdlLogger(log_callback)
 

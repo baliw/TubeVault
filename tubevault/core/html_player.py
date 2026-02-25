@@ -45,6 +45,7 @@ def open_video_player(channel_name: str, video: dict[str, Any]) -> None:
     template = env.get_template("player.html")
     html = template.render(
         title=video.get("title", video_id),
+        upload_date=video.get("upload_date", ""),
         video_uri=video_file.as_uri() if video_file.exists() else "",
         summary_text=summary.get("summary_text", ""),
         main_points=main_points,

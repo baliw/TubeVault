@@ -10,7 +10,7 @@ import yt_dlp
 from yt_dlp.networking.impersonate import ImpersonateTarget
 
 from tubevault.core.database import video_dir
-from tubevault.utils.helpers import ensure_dir
+from tubevault.utils.helpers import ensure_dir, load_proxy_url
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +82,9 @@ def _ydl_opts_base(
         "impersonate": ImpersonateTarget(),
         "remote_components": ["ejs:github"],
     }
+    proxy = load_proxy_url()
+    if proxy:
+        opts["proxy"] = proxy
     if log_callback:
         opts["logger"] = _YdlLogger(log_callback)
     return opts
@@ -150,6 +153,9 @@ def _fetch_channel_videos_sync(
         "impersonate": ImpersonateTarget(),
         "remote_components": ["ejs:github"],
     }
+    proxy = load_proxy_url()
+    if proxy:
+        opts["proxy"] = proxy
     if log_callback:
         opts["logger"] = _YdlLogger(log_callback)
 
