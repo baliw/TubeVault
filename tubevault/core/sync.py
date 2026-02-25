@@ -18,6 +18,7 @@ from tubevault.core.database import (
 from tubevault.core.downloader import download_video, fetch_channel_videos
 from tubevault.core.summarizer import generate_summary
 from tubevault.core.transcript import fetch_transcript
+from tubevault.utils.helpers import load_proxy_url
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,6 @@ async def sync_channel(
     _emit(progress_callback, prog)
 
     _log(log_callback, f"=== Syncing channel: {channel_name} ===")
-    from tubevault.utils.helpers import load_proxy_url
     proxy = load_proxy_url()
     _log(log_callback, f"Proxy: {proxy}" if proxy else "Proxy: none")
     _log(log_callback, f"Fetching video list…")
@@ -159,6 +159,7 @@ async def _process_video(
         _log(log_callback, f"--- Downloading: {title} ({video_id}) ---")
         attempt = 0
         mp4_path = None
+        using_proxy = bool(load_proxy_url())
 
         while True:
             failed = False
@@ -177,33 +178,36 @@ async def _process_video(
                 failed = True
                 _log(log_callback, f"Download error for {video_id}: {exc}")
 
-            # Always pause between requests regardless of outcome.
-            for remaining in range(INTER_REQUEST_DELAY, 0, -1):
-                prog.retry_countdown = remaining
-                prog.retry_message = f"⏸ Next request in {remaining}s"
+            # Pause between requests when not using a proxy.
+            if not using_proxy:
+                for remaining in range(INTER_REQUEST_DELAY, 0, -1):
+                    prog.retry_countdown = remaining
+                    prog.retry_message = f"⏸ Next request in {remaining}s"
+                    _emit(callback, prog)
+                    await asyncio.sleep(1)
+                prog.retry_countdown = 0
+                prog.retry_message = ""
                 _emit(callback, prog)
-                await asyncio.sleep(1)
-            prog.retry_countdown = 0
-            prog.retry_message = ""
-            _emit(callback, prog)
 
             if not failed:
                 break
 
             # Compute how long to wait before retrying.
-            delay = DOWNLOAD_RETRY_DELAYS[min(attempt, len(DOWNLOAD_RETRY_DELAYS) - 1)]
             attempt += 1
-            _log(log_callback, f"Download failed — retrying in {delay}s (attempt {attempt + 1})…")
+            _log(log_callback, f"Download failed — retrying (attempt {attempt + 1})…")
 
-            for remaining in range(delay, 0, -1):
-                prog.retry_countdown = remaining
-                prog.retry_message = f"⏳ Retrying in {remaining}s"
+            if not using_proxy:
+                delay = DOWNLOAD_RETRY_DELAYS[min(attempt - 1, len(DOWNLOAD_RETRY_DELAYS) - 1)]
+                _log(log_callback, f"Waiting {delay}s before retry…")
+                for remaining in range(delay, 0, -1):
+                    prog.retry_countdown = remaining
+                    prog.retry_message = f"⏳ Retrying in {remaining}s"
+                    _emit(callback, prog)
+                    await asyncio.sleep(1)
+                prog.retry_countdown = 0
+                prog.retry_message = ""
                 _emit(callback, prog)
-                await asyncio.sleep(1)
 
-            prog.retry_countdown = 0
-            prog.retry_message = ""
-            _emit(callback, prog)
             _log(log_callback, f"Retrying download for {video_id}…")
 
         if mp4_path:
