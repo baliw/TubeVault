@@ -29,16 +29,19 @@ logger = logging.getLogger(__name__)
 # Total number of quadrant slots always shown in the UI.
 SLOT_COUNT = 4
 # Width (in block chars) of the ASCII download progress bar.
-BAR_WIDTH = 22
+BAR_WIDTH = 16
+# Braille spinner frames cycled during transcript / summary stages.
+SPINNER_FRAMES = "⣾⣽⣻⢿⡿⣟⣯⣷"
 
 
-def _render_slot_header(vp: VideoProgress) -> Text:
-    """Build a 3-line Rich Text header for an active video slot."""
-    title = (vp.title[:36] + "…") if len(vp.title) > 37 else vp.title
+def _render_slot_header(vp: VideoProgress, spinner_frame: int = 0) -> Text:
+    """Build a 3-line Rich Text header for an active video slot.
 
-    dl_pct = max(0, int(vp.download * 100))
-    filled = int(dl_pct / 100 * BAR_WIDTH)
-    bar = "▓" * filled + "░" * (BAR_WIDTH - filled)
+    Line 1 — full video title (Rich wraps at widget width).
+    Line 2 — current active stage: download bar, transcript spinner, or summary spinner.
+    Line 3 — completed-stage checkmarks: Video / Transcript / Summary.
+    """
+    spinner = SPINNER_FRAMES[spinner_frame % len(SPINNER_FRAMES)]
 
     def _icon(status: Any) -> str:
         if isinstance(status, float):
@@ -52,23 +55,40 @@ def _render_slot_header(vp: VideoProgress) -> Text:
             "in_progress": "⏳",
             "skipped": "—",
             "error": "✗",
-            "pending": "pending",
+            "pending": "·",
         }.get(status, status)
 
+    # --- Line 2: active stage ---
+    if vp.transcript == "in_progress":
+        stage_text = f"Fetching transcript  {spinner}"
+        stage_style = "yellow"
+    elif vp.summary == "in_progress":
+        stage_text = f"Generating summary  {spinner}"
+        stage_style = "magenta"
+    else:
+        dl_pct = max(0, int(vp.download * 100))
+        filled = int(dl_pct / 100 * BAR_WIDTH)
+        bar = "▓" * filled + "░" * (BAR_WIDTH - filled)
+        stage_text = f"Downloading  {bar}  {dl_pct:3d}%"
+        stage_style = "green" if vp.download >= 1.0 else "cyan"
+
+    # --- Line 3: per-stage status icons ---
+    dl_icon = _icon(vp.download)
     t_icon = _icon(vp.transcript)
     s_icon = _icon(vp.summary)
 
+    dl_style = "green" if vp.download >= 1.0 else ("red" if isinstance(vp.download, float) and vp.download < 0 else "cyan")
     t_style = "green" if vp.transcript == "done" else ("dim" if vp.transcript == "pending" else "yellow")
     s_style = "green" if vp.summary == "done" else ("dim" if vp.summary == "pending" else "yellow")
 
     t = Text()
-    t.append(title + "\n", style="white bold")
-    t.append("Downloading  ", style="dim")
-    t.append(bar, style="cyan")
-    t.append(f"  {dl_pct:3d}%\n", style="cyan bold")
-    t.append("Transcript  ", style="dim")
+    t.append(vp.title + "\n", style="white bold")
+    t.append(stage_text + "\n", style=stage_style)
+    t.append("Video  ", style="dim")
+    t.append(dl_icon, style=dl_style)
+    t.append("   Transcript  ", style="dim")
     t.append(t_icon, style=t_style)
-    t.append("    Summary  ", style="dim")
+    t.append("   Summary  ", style="dim")
     t.append(s_icon, style=s_style)
     return t
 
@@ -79,6 +99,8 @@ class SyncSlot(Widget):
     def __init__(self, slot_idx: int, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._slot_idx = slot_idx
+        self._vp: VideoProgress | None = None
+        self._spinner_frame: int = 0
 
     def compose(self) -> ComposeResult:
         yield Static(
@@ -94,7 +116,20 @@ class SyncSlot(Widget):
             classes="slot-log",
         )
 
+    def on_mount(self) -> None:
+        # Animate spinner for transcript / summary stages at ~8 fps.
+        self.set_interval(0.125, self._tick_spinner)
+
+    def _tick_spinner(self) -> None:
+        """Advance spinner frame and redraw header if in an animated stage."""
+        if self._vp is not None and (
+            self._vp.transcript == "in_progress" or self._vp.summary == "in_progress"
+        ):
+            self._spinner_frame += 1
+            self._update_header()
+
     def set_idle(self) -> None:
+        self._vp = None
         try:
             h = self.query_one(f"#slot_header_{self._slot_idx}", Static)
             if h.is_mounted:
@@ -103,10 +138,16 @@ class SyncSlot(Widget):
             pass
 
     def update_video(self, vp: VideoProgress) -> None:
+        self._vp = vp
+        self._update_header()
+
+    def _update_header(self) -> None:
+        if self._vp is None:
+            return
         try:
             h = self.query_one(f"#slot_header_{self._slot_idx}", Static)
             if h.is_mounted:
-                h.update(_render_slot_header(vp))
+                h.update(_render_slot_header(self._vp, self._spinner_frame))
         except Exception:
             pass
 
@@ -347,7 +388,7 @@ class SyncScreen(Screen):
         border: solid $panel-lighten-2;
     }
     .slot-header {
-        height: 5;
+        height: auto;
         padding: 1 1;
         border-bottom: solid $panel-lighten-2;
         background: $panel-darken-1;
