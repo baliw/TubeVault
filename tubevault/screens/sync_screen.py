@@ -1,4 +1,4 @@
-"""Synchronization progress screen."""
+"""Synchronization progress screen — four independent slot quadrants."""
 
 import asyncio
 import contextvars
@@ -9,26 +9,122 @@ from typing import Any
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.screen import Screen
+from textual.widget import Widget
 from textual.widgets import Footer, Header, Label, RichLog, Static
 
 from tubevault.core.config import load_config
 from tubevault.core.sync import (
     INTER_REQUEST_DELAY,
-    ChannelSyncProgress, sync_channel, sync_all_channels,
+    ChannelSyncProgress,
+    VideoProgress,
+    sync_channel,
+    sync_all_channels,
 )
 from tubevault.utils.helpers import load_proxy_url
-from tubevault.widgets.progress_panel import ProgressPanel
 
 logger = logging.getLogger(__name__)
+
+# Total number of quadrant slots always shown in the UI.
+SLOT_COUNT = 4
+# Width (in block chars) of the ASCII download progress bar.
+BAR_WIDTH = 22
+
+
+def _render_slot_header(vp: VideoProgress) -> Text:
+    """Build a 3-line Rich Text header for an active video slot."""
+    title = (vp.title[:36] + "…") if len(vp.title) > 37 else vp.title
+
+    dl_pct = max(0, int(vp.download * 100))
+    filled = int(dl_pct / 100 * BAR_WIDTH)
+    bar = "▓" * filled + "░" * (BAR_WIDTH - filled)
+
+    def _icon(status: Any) -> str:
+        if isinstance(status, float):
+            if status >= 1.0:
+                return "✓"
+            if status < 0:
+                return "✗"
+            return f"{int(status * 100)}%"
+        return {
+            "done": "✓",
+            "in_progress": "⏳",
+            "skipped": "—",
+            "error": "✗",
+            "pending": "pending",
+        }.get(status, status)
+
+    t_icon = _icon(vp.transcript)
+    s_icon = _icon(vp.summary)
+
+    t_style = "green" if vp.transcript == "done" else ("dim" if vp.transcript == "pending" else "yellow")
+    s_style = "green" if vp.summary == "done" else ("dim" if vp.summary == "pending" else "yellow")
+
+    t = Text()
+    t.append(title + "\n", style="white bold")
+    t.append("Downloading  ", style="dim")
+    t.append(bar, style="cyan")
+    t.append(f"  {dl_pct:3d}%\n", style="cyan bold")
+    t.append("Transcript  ", style="dim")
+    t.append(t_icon, style=t_style)
+    t.append("    Summary  ", style="dim")
+    t.append(s_icon, style=s_style)
+    return t
+
+
+class SyncSlot(Widget):
+    """One quadrant of the sync screen: a status header and a per-thread log."""
+
+    def __init__(self, slot_idx: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._slot_idx = slot_idx
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            Text(f"  Slot {self._slot_idx + 1}  —  idle", style="dim"),
+            id=f"slot_header_{self._slot_idx}",
+            classes="slot-header",
+        )
+        yield RichLog(
+            highlight=False,
+            markup=False,
+            wrap=True,
+            id=f"slot_log_{self._slot_idx}",
+            classes="slot-log",
+        )
+
+    def set_idle(self) -> None:
+        try:
+            h = self.query_one(f"#slot_header_{self._slot_idx}", Static)
+            if h.is_mounted:
+                h.update(Text(f"  Slot {self._slot_idx + 1}  —  idle", style="dim"))
+        except Exception:
+            pass
+
+    def update_video(self, vp: VideoProgress) -> None:
+        try:
+            h = self.query_one(f"#slot_header_{self._slot_idx}", Static)
+            if h.is_mounted:
+                h.update(_render_slot_header(vp))
+        except Exception:
+            pass
+
+    def write_log(self, msg: Any) -> None:
+        try:
+            log = self.query_one(f"#slot_log_{self._slot_idx}", RichLog)
+            if log.is_mounted:
+                log.write(msg if isinstance(msg, Text) else Text(str(msg)))
+        except Exception:
+            pass
 
 
 class SyncScreen(Screen):
     """Full-screen sync progress display.
 
     The sync runs as an App-level worker so it survives this screen being
-    popped.  Returning to this screen replays accumulated log lines and
-    shows the latest progress state.
+    popped.  Returning to this screen replays accumulated per-slot log lines
+    and shows the latest progress state.
     """
 
     TITLE = "TubeVault"
@@ -48,40 +144,38 @@ class SyncScreen(Screen):
         yield Header(show_clock=True)
         yield Label("Press Escape to return; sync continues in background.", id="sync_hint")
         yield Label("", id="sync_config_label")
-        yield ProgressPanel(channel_name=self._channel_name or "", id="progress_panel")
+        yield Label("", id="overall_label")
         yield Label("", id="countdown_label")
-        yield RichLog(
-            highlight=False,
-            markup=False,
-            wrap=True,
-            id="output_log",
-        )
+        with Horizontal(id="row_top"):
+            yield SyncSlot(0, id="slot_0")
+            yield SyncSlot(1, id="slot_1")
+        with Horizontal(id="row_bottom"):
+            yield SyncSlot(2, id="slot_2")
+            yield SyncSlot(3, id="slot_3")
         yield Footer()
 
     def on_mount(self) -> None:
         self._populate_config_label()
-        log = self.query_one("#output_log", RichLog)
-        panel = self.query_one("#progress_panel", ProgressPanel)
 
-        # Replay any log lines accumulated while this screen was not visible.
-        for msg in self.app.sync_logs:
-            log.write(msg if isinstance(msg, Text) else Text(msg))
+        # Replay per-slot logs accumulated while this screen was not visible.
+        slot_logs = getattr(self.app, "sync_slot_logs", [[], [], [], []])
+        for i in range(SLOT_COUNT):
+            logs = slot_logs[i] if i < len(slot_logs) else []
+            try:
+                slot = self.query_one(f"#slot_{i}", SyncSlot)
+                for msg in logs:
+                    slot.write_log(msg)
+            except Exception:
+                pass
 
         # Show the latest progress snapshot.
         if self.app.sync_progress is not None:
-            panel.update_progress(self.app.sync_progress)
-            lbl = self.query_one("#countdown_label", Label)
-            p = self.app.sync_progress
-            if p.retry_countdown > 0:
-                style = "bold orange1" if p.retry_message.startswith("⏳") else "dim cyan"
-                lbl.update(Text(p.retry_message, style=style))
+            self._deliver_progress(self.app.sync_progress)
 
         # Only start a new sync if one is not already running.
         if not self.app.sync_running:
-            self.app.sync_logs.clear()
+            self.app.sync_slot_logs = [[], [], [], []]
             self.app.sync_progress = None
-            # Run the worker at the App level so it isn't cancelled when
-            # this screen is popped.
             self.app.run_worker(self._run_sync(), exclusive=False)
 
     async def _run_sync(self) -> None:
@@ -93,8 +187,17 @@ class SyncScreen(Screen):
         self.app.sync_running = True
 
         def _write_log(msg: Any) -> None:
-            self.app.sync_logs.append(msg)
-            loop.call_soon_threadsafe(ctx.run, self._deliver_log, msg)
+            # Channel-level messages (fetching list, completion) go to slot 0.
+            logs = getattr(self.app, "sync_slot_logs", None)
+            if logs:
+                logs[0].append(msg)
+            loop.call_soon_threadsafe(ctx.run, self._deliver_slot_log, msg, 0)
+
+        def _slot_log_callback(slot_idx: int, msg: Any) -> None:
+            logs = getattr(self.app, "sync_slot_logs", None)
+            if logs and slot_idx < len(logs):
+                logs[slot_idx].append(msg)
+            loop.call_soon_threadsafe(ctx.run, self._deliver_slot_log, msg, slot_idx)
 
         def _progress_callback(prog: ChannelSyncProgress) -> None:
             self.app.sync_progress = prog
@@ -104,7 +207,6 @@ class SyncScreen(Screen):
             warnings.simplefilter("ignore")
             try:
                 if self._channel_name and self._channel_url:
-                    from tubevault.core.config import load_config
                     config = load_config()
                     quality = config.get("download_quality", "1080p")
                     max_concurrent = config.get("max_concurrent_downloads", 2)
@@ -115,40 +217,66 @@ class SyncScreen(Screen):
                         max_concurrent=max_concurrent,
                         progress_callback=_progress_callback,
                         log_callback=_write_log,
+                        slot_log_callback=_slot_log_callback,
                     )
                 else:
                     await sync_all_channels(
                         progress_callback=_progress_callback,
                         log_callback=_write_log,
+                        slot_log_callback=_slot_log_callback,
                     )
             except Exception as exc:
                 logger.error("Sync error: %s", exc)
                 err_msg = f"ERROR: {exc}"
-                self.app.sync_logs.append(err_msg)
-                loop.call_soon_threadsafe(ctx.run, self._deliver_log, err_msg)
+                logs = getattr(self.app, "sync_slot_logs", None)
+                if logs:
+                    logs[0].append(err_msg)
+                loop.call_soon_threadsafe(ctx.run, self._deliver_slot_log, err_msg, 0)
             finally:
                 self.app.sync_running = False
 
-    def _deliver_log(self, msg: Any) -> None:
-        """Write a log line to whichever SyncScreen is currently on the stack."""
+    def _deliver_slot_log(self, msg: Any, slot_idx: int) -> None:
+        """Write a log line to the correct slot widget on the current SyncScreen."""
         for screen in self.app.screen_stack:
             if isinstance(screen, SyncScreen):
                 try:
-                    log = screen.query_one("#output_log", RichLog)
-                    if log.is_mounted:
-                        log.write(msg if isinstance(msg, Text) else Text(msg))
+                    slot = screen.query_one(f"#slot_{slot_idx}", SyncSlot)
+                    slot.write_log(msg)
                 except Exception:
                     pass
                 return
 
     def _deliver_progress(self, prog: ChannelSyncProgress) -> None:
-        """Send a progress update to whichever SyncScreen is currently on the stack."""
+        """Update all slot headers and the overall label on the current SyncScreen."""
         for screen in self.app.screen_stack:
             if isinstance(screen, SyncScreen):
                 try:
-                    panel = screen.query_one("#progress_panel", ProgressPanel)
-                    if panel.is_mounted:
-                        panel.update_progress(prog)
+                    # Overall progress label
+                    overall = screen.query_one("#overall_label", Label)
+                    if overall.is_mounted:
+                        if prog.done:
+                            if prog.error:
+                                overall.update(Text(f"Error: {prog.error}", style="red"))
+                            else:
+                                overall.update(
+                                    Text(f"Sync complete — {prog.completed} videos processed.", style="green")
+                                )
+                        else:
+                            overall.update(f"[{prog.completed}/{prog.total} videos synced]")
+
+                    # Per-slot headers
+                    for i in range(SLOT_COUNT):
+                        try:
+                            slot = screen.query_one(f"#slot_{i}", SyncSlot)
+                            vp = prog.slots[i] if i < len(prog.slots) else None
+                            if vp is not None:
+                                slot.update_video(vp)
+                            else:
+                                slot.set_idle()
+                        except Exception:
+                            pass
+
+                    # Countdown label (inter-request delay, no-proxy only)
                     lbl = screen.query_one("#countdown_label", Label)
                     if lbl.is_mounted:
                         if prog.retry_countdown > 0:
@@ -162,14 +290,12 @@ class SyncScreen(Screen):
 
     def _populate_config_label(self) -> None:
         proxy_url = load_proxy_url()
-        config = load_config()
-        max_concurrent = config.get("max_concurrent_downloads", 2)
 
         if proxy_url:
             from urllib.parse import urlparse
             p = urlparse(proxy_url)
             proxy_display = f"{p.hostname}:{p.port}"
-            threads_display = str(max_concurrent)
+            threads_display = str(SLOT_COUNT)
             spacing_display = "none"
         else:
             proxy_display = "none"
@@ -195,28 +321,40 @@ class SyncScreen(Screen):
     }
     #sync_hint {
         color: $text-muted;
-        margin-bottom: 0;
+        height: 1;
     }
     #sync_config_label {
         width: 100%;
         height: 1;
-        margin-bottom: 1;
     }
-    #progress_panel {
+    #overall_label {
         width: 100%;
-        height: auto;
-        margin-bottom: 0;
+        height: 1;
+        color: $text-muted;
     }
     #countdown_label {
         width: 100%;
         height: 1;
         margin-bottom: 0;
     }
-    #output_log {
-        width: 100%;
+    #row_top, #row_bottom {
         height: 1fr;
+        layout: horizontal;
+    }
+    SyncSlot {
+        width: 1fr;
+        height: 100%;
         border: solid $panel-lighten-2;
-        background: $panel;
+    }
+    .slot-header {
+        height: 5;
+        padding: 1 1;
+        border-bottom: solid $panel-lighten-2;
+        background: $panel-darken-1;
+    }
+    .slot-log {
+        height: 1fr;
         padding: 0 1;
+        background: $panel;
     }
     """

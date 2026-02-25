@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 # Seconds to wait between successive download requests (no-proxy mode only).
 INTER_REQUEST_DELAY = 10
 
+# Number of concurrent download threads when a proxy is configured.
+PROXY_CONCURRENCY = 4
+
 
 @dataclass
 class VideoProgress:
@@ -44,7 +47,9 @@ class ChannelSyncProgress:
     channel_name: str
     total: int = 0
     completed: int = 0
-    active_videos: list[VideoProgress] = field(default_factory=list)
+    # Fixed-size list of video slots (always length 4); None = idle slot.
+    slots: list[VideoProgress | None] = field(default_factory=list)
+    slot_count: int = 1        # how many slots are concurrently active
     done: bool = False
     error: str | None = None
     retry_countdown: int = 0   # seconds remaining in retry wait (0 = not waiting)
@@ -53,6 +58,7 @@ class ChannelSyncProgress:
 
 SyncCallback = Callable[[ChannelSyncProgress], None]
 LogCallback = Callable[[Any], None]
+SlotLogCallback = Callable[[int, Any], None]
 
 
 async def sync_channel(
@@ -62,6 +68,7 @@ async def sync_channel(
     max_concurrent: int = 2,
     progress_callback: SyncCallback | None = None,
     log_callback: LogCallback | None = None,
+    slot_log_callback: SlotLogCallback | None = None,
 ) -> None:
     """Sync a single channel: fetch video list, download new videos, transcribe, summarize.
 
@@ -69,17 +76,23 @@ async def sync_channel(
         channel_name: Channel slug.
         channel_url: YouTube channel URL.
         quality: Download quality string.
-        max_concurrent: Max concurrent download workers.
+        max_concurrent: Ignored when proxy is configured (PROXY_CONCURRENCY is used instead).
         progress_callback: Optional callback invoked on each state change.
-        log_callback: Optional callback for human-readable log lines.
+        log_callback: Optional callback for channel-level log lines (routed to slot 0).
+        slot_log_callback: Optional callback for per-slot log lines; receives (slot_idx, msg).
     """
-    prog = ChannelSyncProgress(channel_name=channel_name)
+    # Always allocate 4 UI slots so the quadrant display is stable.
+    NUM_SLOTS = 4
+    prog = ChannelSyncProgress(channel_name=channel_name, slots=[None] * NUM_SLOTS)
     _emit(progress_callback, prog)
 
     _log(log_callback, f"=== Syncing channel: {channel_name} ===")
     proxy = load_proxy_url()
     _log(log_callback, f"Proxy: {proxy}" if proxy else "Proxy: none")
-    _log(log_callback, f"Fetching video list…")
+    _log(log_callback, "Fetching video list…")
+
+    concurrency = PROXY_CONCURRENCY if proxy else 1
+    prog.slot_count = concurrency
 
     try:
         remote_videos = await fetch_channel_videos(channel_url, log_callback=log_callback)
@@ -117,19 +130,32 @@ async def sync_channel(
     for v in new_videos:
         upsert_video(channel_name, v)
 
-    concurrency = max_concurrent if proxy else 1
     semaphore = asyncio.Semaphore(concurrency)
+    available_slots: list[int] = list(range(concurrency))
 
     async def _process_one(video: dict[str, Any]) -> None:
         async with semaphore:
+            slot_idx = available_slots.pop(0)
+
+            def _slot_log(msg: Any) -> None:
+                if slot_log_callback:
+                    try:
+                        slot_log_callback(slot_idx, msg)
+                    except Exception:
+                        pass
+
             try:
-                await _process_video(channel_name, video, quality, prog, progress_callback, log_callback)
+                await _process_video(
+                    channel_name, video, quality, prog, slot_idx,
+                    progress_callback, _slot_log,
+                )
             except Exception as exc:
                 msg = f"Failed to process {video.get('video_id')}: {exc}"
                 logger.error(msg)
-                _log(log_callback, f"ERROR: {msg}")
-            vid_id = video.get("video_id")
-            prog.active_videos = [v for v in prog.active_videos if v.video_id != vid_id]
+                _slot_log(f"ERROR: {msg}")
+            finally:
+                prog.slots[slot_idx] = None
+                available_slots.append(slot_idx)
             prog.completed += 1
             _emit(progress_callback, prog)
 
@@ -137,7 +163,7 @@ async def sync_channel(
 
     mark_library_synced(channel_name)
     prog.done = True
-    prog.active_videos.clear()
+    prog.slots = [None] * NUM_SLOTS
     _emit(progress_callback, prog)
     _log(log_callback, f"=== Sync complete: {len(to_process)} videos processed ===")
     logger.info("Channel %s sync complete.", channel_name)
@@ -148,6 +174,7 @@ async def _process_video(
     video: dict[str, Any],
     quality: str,
     prog: ChannelSyncProgress,
+    slot_idx: int,
     callback: SyncCallback | None,
     log_callback: LogCallback | None,
 ) -> None:
@@ -155,7 +182,7 @@ async def _process_video(
     video_id = video["video_id"]
     title = video.get("title", video_id)
     vp = VideoProgress(video_id=video_id, title=title)
-    prog.active_videos.append(vp)
+    prog.slots[slot_idx] = vp
     _emit(callback, prog)
 
     # --- Download ---
@@ -278,12 +305,14 @@ def _log(callback: LogCallback | None, msg: Any) -> None:
 async def sync_all_channels(
     progress_callback: SyncCallback | None = None,
     log_callback: LogCallback | None = None,
+    slot_log_callback: SlotLogCallback | None = None,
 ) -> None:
     """Sync all channels configured in config.json.
 
     Args:
         progress_callback: Optional callback for progress updates.
-        log_callback: Optional callback for human-readable log lines.
+        log_callback: Optional callback for channel-level log lines.
+        slot_log_callback: Optional callback for per-slot log lines.
     """
     config = load_config()
     channels = config.get("channels", [])
@@ -300,4 +329,5 @@ async def sync_all_channels(
             max_concurrent=max_concurrent,
             progress_callback=progress_callback,
             log_callback=log_callback,
+            slot_log_callback=slot_log_callback,
         )
