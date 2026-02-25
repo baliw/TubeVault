@@ -21,7 +21,7 @@ class _ChannelList(ListView):
     def action_cursor_up(self) -> None:
         if self.index == 0 or self.index is None:
             # At the top — hand off focus to the first action button.
-            self.screen.query_one("#btn_add", Button).focus()
+            self.screen.query_one("#btn_sync", Button).focus()
         else:
             super().action_cursor_up()
 
@@ -65,9 +65,9 @@ class ChannelSelectScreen(Screen):
         with Vertical(id="center_panel"):
             yield Static("TubeVault", id="app_title")
             with Horizontal(id="action_bar"):
+                yield Button("Sync All", id="btn_sync")
                 yield Button("Add", id="btn_add")
                 yield Button("Remove", id="btn_remove")
-                yield Button("Sync All", id="btn_sync")
                 yield Button("Quit", id="btn_quit")
             yield _ChannelList(id="channel_list")
             yield Label("", id="status_label")
