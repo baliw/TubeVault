@@ -39,5 +39,15 @@ else
   echo "Warning: credentials file not found at $CREDENTIALS" >&2
 fi
 
+# Handle --proxy-info: print the configured proxy URL and exit
+if [[ "${1:-}" == "--proxy-info" ]]; then
+  "$VENV_DIR/bin/python" - <<'PYEOF'
+from tubevault.utils.helpers import load_proxy_url
+url = load_proxy_url()
+print(url if url else "No proxy configured")
+PYEOF
+  exit 0
+fi
+
 # Run TubeVault, passing through any CLI arguments
 exec "$VENV_DIR/bin/python" -m tubevault "$@"
