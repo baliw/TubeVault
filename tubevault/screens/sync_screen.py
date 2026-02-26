@@ -6,6 +6,8 @@ import logging
 import warnings
 from typing import Any
 
+from rich.console import Group
+from rich.table import Table
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -34,10 +36,10 @@ BAR_WIDTH = 16
 SPINNER_FRAMES = "⣾⣽⣻⢿⡿⣟⣯⣷"
 
 
-def _render_slot_header(vp: VideoProgress, spinner_frame: int = 0) -> Text:
-    """Build a 3-line Rich Text header for an active video slot.
+def _render_slot_header(vp: VideoProgress, spinner_frame: int = 0) -> Group:
+    """Build a 3-line Rich renderable for an active video slot.
 
-    Line 1 — full video title (Rich wraps at widget width).
+    Line 1 — title (left) + channel name right-justified.
     Line 2 — current active stage: download bar, transcript spinner, or summary spinner.
     Line 3 — completed-stage checkmarks: Video / Transcript / Summary.
     """
@@ -58,19 +60,26 @@ def _render_slot_header(vp: VideoProgress, spinner_frame: int = 0) -> Text:
             "pending": "·",
         }.get(status, status)
 
+    # --- Line 1: title left, channel name right ---
+    title_row = Table.grid(expand=True, padding=0)
+    title_row.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
+    title_row.add_column(no_wrap=True)
+    title_row.add_row(
+        Text(vp.title, style="white bold"),
+        Text(f" {vp.channel_name}", style="dim", justify="right"),
+    )
+
     # --- Line 2: active stage ---
     if vp.transcript == "in_progress":
-        stage_text = f"Fetching transcript  {spinner}"
-        stage_style = "yellow"
+        stage_line = Text(f"Fetching transcript  {spinner}", style="yellow")
     elif vp.summary == "in_progress":
-        stage_text = f"Generating summary  {spinner}"
-        stage_style = "magenta"
+        stage_line = Text(f"Generating summary  {spinner}", style="magenta")
     else:
         dl_pct = max(0, int(vp.download * 100))
         filled = int(dl_pct / 100 * BAR_WIDTH)
         bar = "▓" * filled + "░" * (BAR_WIDTH - filled)
-        stage_text = f"Downloading  {bar}  {dl_pct:3d}%"
         stage_style = "green" if vp.download >= 1.0 else "cyan"
+        stage_line = Text(f"Downloading  {bar}  {dl_pct:3d}%", style=stage_style)
 
     # --- Line 3: per-stage status icons ---
     dl_icon = _icon(vp.download)
@@ -81,16 +90,15 @@ def _render_slot_header(vp: VideoProgress, spinner_frame: int = 0) -> Text:
     t_style = "green" if vp.transcript == "done" else ("dim" if vp.transcript == "pending" else "yellow")
     s_style = "green" if vp.summary == "done" else ("dim" if vp.summary == "pending" else "yellow")
 
-    t = Text()
-    t.append(vp.title + "\n", style="white bold")
-    t.append(stage_text + "\n", style=stage_style)
-    t.append("Video  ", style="dim")
-    t.append(dl_icon, style=dl_style)
-    t.append("   Transcript  ", style="dim")
-    t.append(t_icon, style=t_style)
-    t.append("   Summary  ", style="dim")
-    t.append(s_icon, style=s_style)
-    return t
+    status_line = Text()
+    status_line.append("Video  ", style="dim")
+    status_line.append(dl_icon, style=dl_style)
+    status_line.append("   Transcript  ", style="dim")
+    status_line.append(t_icon, style=t_style)
+    status_line.append("   Summary  ", style="dim")
+    status_line.append(s_icon, style=s_style)
+
+    return Group(title_row, stage_line, status_line)
 
 
 class SyncSlot(Widget):

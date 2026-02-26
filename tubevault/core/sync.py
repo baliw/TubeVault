@@ -35,6 +35,7 @@ class VideoProgress:
 
     video_id: str
     title: str
+    channel_name: str = ""       # which channel this video belongs to
     download: float = 0.0        # 0.0–1.0
     transcript: str = "pending"  # pending | in_progress | done | skipped | error
     summary: str = "pending"     # pending | in_progress | done | skipped | error
@@ -181,7 +182,7 @@ async def _process_video(
     """Process a single video: download, transcript, summary."""
     video_id = video["video_id"]
     title = video.get("title", video_id)
-    vp = VideoProgress(video_id=video_id, title=title)
+    vp = VideoProgress(video_id=video_id, title=title, channel_name=channel_name)
     prog.slots[slot_idx] = vp
     _emit(callback, prog)
 
@@ -307,27 +308,129 @@ async def sync_all_channels(
     log_callback: LogCallback | None = None,
     slot_log_callback: SlotLogCallback | None = None,
 ) -> None:
-    """Sync all channels configured in config.json.
+    """Sync all auto-sync channels concurrently.
+
+    Threads are distributed across channels so each thread initially works on
+    a different channel.  When a channel's queue is exhausted, freed threads
+    are reassigned to the channel with the most remaining videos (farthest
+    behind).
 
     Args:
         progress_callback: Optional callback for progress updates.
-        log_callback: Optional callback for channel-level log lines.
+        log_callback: Optional callback for channel-level log lines (→ slot 0).
         slot_log_callback: Optional callback for per-slot log lines.
     """
     config = load_config()
-    channels = config.get("channels", [])
-    max_concurrent = config.get("max_concurrent_downloads", 2)
+    channels_cfg = config.get("channels", [])
+    proxy = load_proxy_url()
+    concurrency = PROXY_CONCURRENCY if proxy else 1
+    NUM_SLOTS = 4
 
-    for channel in channels:
-        if not channel.get("auto_sync", True):
+    prog = ChannelSyncProgress(
+        channel_name="All Channels",
+        slots=[None] * NUM_SLOTS,
+        slot_count=concurrency,
+    )
+    _emit(progress_callback, prog)
+
+    # --- Phase 1: fetch video lists sequentially to avoid rate-limiting ---
+    channel_queues: dict[str, list[dict[str, Any]]] = {}
+    channel_quality: dict[str, str] = {}
+
+    for ch in channels_cfg:
+        if not ch.get("auto_sync", True):
             continue
-        quality = QUALITY_MAP.get(channel.get("quality", "high"), "1080p")
-        await sync_channel(
-            channel_name=channel["name"],
-            channel_url=channel["url"],
-            quality=quality,
-            max_concurrent=max_concurrent,
-            progress_callback=progress_callback,
-            log_callback=log_callback,
-            slot_log_callback=slot_log_callback,
-        )
+        ch_name = ch["name"]
+        ch_url = ch["url"]
+        quality = QUALITY_MAP.get(ch.get("quality", "high"), "1080p")
+
+        _log(log_callback, f"=== Fetching video list: {ch_name} ===")
+        try:
+            remote_videos = await fetch_channel_videos(ch_url, log_callback=log_callback)
+        except Exception as exc:
+            _log(log_callback, f"ERROR fetching {ch_name}: {exc}")
+            continue
+
+        library = load_library(ch_name)
+        existing_ids = {v["video_id"] for v in library.get("videos", [])}
+        new_videos = [v for v in remote_videos if v["video_id"] not in existing_ids]
+        backfill = [
+            v for v in library.get("videos", [])
+            if not v.get("has_transcript") or not v.get("has_summary")
+        ]
+        to_process = new_videos + backfill
+
+        for v in new_videos:
+            upsert_video(ch_name, v)
+
+        if to_process:
+            channel_queues[ch_name] = to_process
+            channel_quality[ch_name] = quality
+            _log(log_callback, f"{ch_name}: {len(new_videos)} new, {len(backfill)} to backfill")
+        else:
+            _log(log_callback, f"{ch_name}: up to date")
+
+    prog.total = sum(len(q) for q in channel_queues.values())
+    _emit(progress_callback, prog)
+
+    if not channel_queues:
+        _log(log_callback, "All channels are up to date.")
+        prog.done = True
+        _emit(progress_callback, prog)
+        return
+
+    # --- Phase 2: build interleaved work list ---
+    # Each pass picks one video from each channel sorted by remaining count
+    # (largest first).  This ensures every channel gets an initial slot and
+    # the farthest-behind channel gets proportionally more throughput.
+    work: list[tuple[str, dict[str, Any]]] = []
+    queues_copy = {name: list(q) for name, q in channel_queues.items()}
+    while any(queues_copy.values()):
+        for ch_name in sorted(queues_copy, key=lambda c: -len(queues_copy[c])):
+            if queues_copy[ch_name]:
+                work.append((ch_name, queues_copy[ch_name].pop(0)))
+
+    # --- Phase 3: process with concurrent slot workers ---
+    semaphore = asyncio.Semaphore(concurrency)
+    available_slots: list[int] = list(range(concurrency))
+
+    async def _process_one(ch_name: str, video: dict[str, Any]) -> None:
+        async with semaphore:
+            slot_idx = available_slots.pop(0)
+
+            def _slot_log(msg: Any) -> None:
+                if slot_log_callback:
+                    try:
+                        slot_log_callback(slot_idx, msg)
+                    except Exception:
+                        pass
+
+            quality = channel_quality[ch_name]
+            try:
+                await _process_video(
+                    ch_name, video, quality, prog, slot_idx,
+                    progress_callback, _slot_log,
+                )
+            except Exception as exc:
+                msg = f"Failed to process {video.get('video_id')}: {exc}"
+                logger.error(msg)
+                _slot_log(f"ERROR: {msg}")
+            finally:
+                prog.slots[slot_idx] = None
+                available_slots.append(slot_idx)
+            prog.completed += 1
+            _emit(progress_callback, prog)
+
+    await asyncio.gather(*[_process_one(cn, v) for cn, v in work])
+
+    for ch_name in channel_queues:
+        mark_library_synced(ch_name)
+
+    prog.done = True
+    prog.slots = [None] * NUM_SLOTS
+    _emit(progress_callback, prog)
+    _log(
+        log_callback,
+        f"=== Sync complete: {prog.total} videos across {len(channel_queues)} channels ===",
+    )
+    logger.info("sync_all_channels complete: %d videos.", prog.total)
