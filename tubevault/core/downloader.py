@@ -122,22 +122,27 @@ def _videos_url(channel_url: str) -> str:
 async def fetch_channel_videos(
     channel_url: str,
     log_callback: LogCallback | None = None,
+    stop_at_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch the list of video metadata entries for a channel.
 
     Args:
         channel_url: YouTube channel URL.
         log_callback: Optional callback for yt-dlp output lines.
+        stop_at_ids: If provided, stop fetching pages as soon as a video with
+            one of these IDs is encountered (YouTube lists newest-first, so any
+            video in this set means all older videos were already processed).
 
     Returns:
         List of video info dicts.
     """
-    return await run_in_daemon_thread(_fetch_channel_videos_sync, channel_url, log_callback)
+    return await run_in_daemon_thread(_fetch_channel_videos_sync, channel_url, log_callback, stop_at_ids)
 
 
 def _fetch_channel_videos_sync(
     channel_url: str,
     log_callback: LogCallback | None = None,
+    stop_at_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Synchronous implementation of channel video listing."""
     url = _videos_url(channel_url)
@@ -200,6 +205,12 @@ def _fetch_channel_videos_sync(
             video_id = entry.get("id") or entry.get("url", "").split("?v=")[-1]
             if not video_id or entry.get("_type") == "playlist":
                 continue
+            if stop_at_ids and video_id in stop_at_ids:
+                msg = f"Found already-processed video {video_id} — stopping fetch"
+                logger.info(msg)
+                if log_callback:
+                    log_callback(msg)
+                break
             results.append(
                 {
                     "video_id": video_id,

@@ -99,8 +99,17 @@ async def sync_channel(
     concurrency = PROXY_CONCURRENCY if proxy else 1
     prog.slot_count = concurrency
 
+    library = load_library(channel_name)
+    existing_ids = {v["video_id"] for v in library.get("videos", [])}
+    stop_at_ids = {
+        v["video_id"] for v in library.get("videos", [])
+        if v.get("has_video") and v.get("has_transcript") and v.get("has_summary")
+    }
+
     try:
-        remote_videos = await fetch_channel_videos(channel_url, log_callback=log_callback)
+        remote_videos = await fetch_channel_videos(
+            channel_url, log_callback=log_callback, stop_at_ids=stop_at_ids,
+        )
     except Exception as exc:
         prog.error = str(exc)
         prog.done = True
@@ -108,9 +117,6 @@ async def sync_channel(
         _log(log_callback, f"ERROR fetching channel videos: {exc}")
         logger.error("Failed to fetch channel videos: %s", exc)
         return
-
-    library = load_library(channel_name)
-    existing_ids = {v["video_id"] for v in library.get("videos", [])}
 
     new_videos = [v for v in remote_videos if v["video_id"] not in existing_ids]
     backfill_videos = [
@@ -368,18 +374,24 @@ async def sync_all_channels(
         )
         _emit(progress_callback, prog)
 
+        library = load_library(ch_name)
+        existing_ids = {v["video_id"] for v in library.get("videos", [])}
+        stop_at_ids = {
+            v["video_id"] for v in library.get("videos", [])
+            if v.get("has_video") and v.get("has_transcript") and v.get("has_summary")
+        }
+
         _slog(f"=== Fetching video list: {ch_name} ===")
         try:
-            remote_videos = await fetch_channel_videos(ch_url, log_callback=_slog)
+            remote_videos = await fetch_channel_videos(
+                ch_url, log_callback=_slog, stop_at_ids=stop_at_ids,
+            )
         except Exception as exc:
             _slog(f"ERROR fetching {ch_name}: {exc}")
             return
         finally:
             prog.slots[slot_idx] = None
             _emit(progress_callback, prog)
-
-        library = load_library(ch_name)
-        existing_ids = {v["video_id"] for v in library.get("videos", [])}
         new_videos = [v for v in remote_videos if v["video_id"] not in existing_ids]
         backfill = [
             v for v in library.get("videos", [])
