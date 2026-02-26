@@ -70,6 +70,17 @@ def _render_slot_header(vp: VideoProgress, spinner_frame: int = 0) -> Group:
             "pending": "·",
         }.get(status, status)
 
+    # --- Fetching-list state: single header line, no download/stage rows ---
+    if vp.fetching:
+        row = Table.grid(expand=True, padding=0)
+        row.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
+        row.add_column(no_wrap=True)
+        row.add_row(
+            Text(f"{vp.title}  {spinner}", style="cyan"),
+            Text(f" {vp.channel_name}", style="dim", justify="right"),
+        )
+        return Group(row)
+
     # --- Line 1: title left, channel name right ---
     title_row = Table.grid(expand=True, padding=0)
     title_row.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
@@ -147,7 +158,9 @@ class SyncSlot(Widget):
     def _tick_spinner(self) -> None:
         """Advance spinner frame and redraw header if in an animated stage."""
         if self._vp is not None and (
-            self._vp.transcript == "in_progress" or self._vp.summary == "in_progress"
+            self._vp.fetching
+            or self._vp.transcript == "in_progress"
+            or self._vp.summary == "in_progress"
         ):
             self._spinner_frame += 1
             self._update_header()

@@ -36,6 +36,7 @@ class VideoProgress:
     video_id: str
     title: str
     channel_name: str = ""       # which channel this video belongs to
+    fetching: bool = False       # True while fetching the channel's video list
     download: float = 0.0        # 0.0–1.0
     downloaded_bytes: int = 0
     total_bytes: int = 0
@@ -361,12 +362,21 @@ async def sync_all_channels(
                 except Exception:
                     pass
 
+        # Show "Fetching video list…" in the slot header while fetching.
+        prog.slots[slot_idx] = VideoProgress(
+            video_id="", title="Fetching video list\u2026", channel_name=ch_name, fetching=True,
+        )
+        _emit(progress_callback, prog)
+
         _slog(f"=== Fetching video list: {ch_name} ===")
         try:
             remote_videos = await fetch_channel_videos(ch_url, log_callback=_slog)
         except Exception as exc:
             _slog(f"ERROR fetching {ch_name}: {exc}")
             return
+        finally:
+            prog.slots[slot_idx] = None
+            _emit(progress_callback, prog)
 
         library = load_library(ch_name)
         existing_ids = {v["video_id"] for v in library.get("videos", [])}
