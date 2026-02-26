@@ -86,6 +86,9 @@ class TubeVaultApp(App):
         # duration of whatever yt-dlp download is in flight.
         if self.sync_running:
             cleanup_temp_files()
+            import sys
+            sys.stdout.write("\x1b[?25h")  # re-enable cursor before hard exit
+            sys.stdout.flush()
             os._exit(0)
         super().action_quit()
 
