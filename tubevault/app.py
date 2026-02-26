@@ -78,12 +78,16 @@ class TubeVaultApp(App):
         )
 
     # ------------------------------------------------------------------ Cleanup
+    def action_quit(self) -> None:
+        # Check sync_running here, before Textual cancels workers (which sets
+        # it to False in the worker's finally block).  os._exit bypasses
+        # Python's atexit handlers — specifically concurrent.futures'
+        # shutdown(wait=True) which would otherwise stall the terminal for the
+        # duration of whatever yt-dlp download is in flight.
+        if self.sync_running:
+            cleanup_temp_files()
+            os._exit(0)
+        super().action_quit()
+
     def on_unmount(self) -> None:
         cleanup_temp_files()
-        if self.sync_running:
-            # yt-dlp creates ThreadPoolExecutors internally; Python's atexit
-            # handler waits for them to finish, which stalls the terminal for
-            # as long as the in-progress download takes.  Force-exit skips
-            # those atexit waits while still reaching this point for any real
-            # cleanup (temp files above, Textual's own teardown, etc.).
-            os._exit(0)
