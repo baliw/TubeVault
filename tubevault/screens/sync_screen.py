@@ -91,9 +91,9 @@ def _render_slot_header(vp: VideoProgress, spinner_frame: int = 0) -> Group:
         stage_style = "green" if vp.download >= 1.0 else "cyan"
         size_str = ""
         if vp.total_bytes > 0:
-            size_str = f"  {_fmt_bytes(vp.downloaded_bytes)} / {_fmt_bytes(vp.total_bytes)}"
+            size_str = f"  [{_fmt_bytes(vp.downloaded_bytes)} / {_fmt_bytes(vp.total_bytes)}]"
         elif vp.downloaded_bytes > 0:
-            size_str = f"  {_fmt_bytes(vp.downloaded_bytes)}"
+            size_str = f"  [{_fmt_bytes(vp.downloaded_bytes)}]"
         quality_str = f"  {vp.quality}" if vp.quality else ""
         stage_line = Text(f"Downloading  {bar}  {dl_pct:3d}%{size_str}{quality_str}", style=stage_style)
 
