@@ -44,11 +44,11 @@ class _YdlLogger:
 
     def warning(self, msg: str) -> None:
         if msg.strip():
-            self._cb(f"WARNING: {msg}")
+            self._cb(msg)  # yt-dlp already prefixes with "WARNING: "
 
     def error(self, msg: str) -> None:
         if msg.strip():
-            self._cb(f"ERROR: {msg}")
+            self._cb(msg)  # yt-dlp already prefixes with "ERROR: "
 
 
 def _ydl_opts_base(

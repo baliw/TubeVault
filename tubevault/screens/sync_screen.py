@@ -438,5 +438,6 @@ class SyncScreen(Screen):
         height: 1fr;
         padding: 0 1;
         background: $panel;
+        scrollbar-size-vertical: 0;
     }
     """
