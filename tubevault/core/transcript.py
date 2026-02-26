@@ -62,8 +62,8 @@ async def fetch_transcript(
                 log_callback(f"Subtitles fetched via yt-dlp ({len(segments)} segments)")
             return segments
     except Exception as exc:
-        from tubevault.core.downloader import MembersOnlyError
-        if isinstance(exc, MembersOnlyError):
+        from tubevault.core.downloader import BotCheckError, MembersOnlyError
+        if isinstance(exc, (BotCheckError, MembersOnlyError)):
             raise
         msg = f"yt-dlp subtitle extraction failed for {video_id}: {exc}"
         logger.warning(msg)
@@ -105,17 +105,22 @@ def _fetch_via_ytdlp(
 ) -> list[dict[str, Any]] | None:
     """Use yt-dlp to download subtitles and parse them."""
     import yt_dlp
-    from tubevault.core.downloader import MembersOnlyError, _MEMBERS_ONLY_RE, _YdlLogger
+    from tubevault.core.downloader import (
+        BotCheckError, MembersOnlyError, _BOT_CHECK_RE, _MEMBERS_ONLY_RE, _YdlLogger,
+    )
 
     out_dir = video_dir(channel_name, video_id)
     ensure_dir(out_dir)
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     _members_only: list[bool] = [False]
+    _bot_check: list[bool] = [False]
 
     def _wrapped_log(msg: str) -> None:
         if _MEMBERS_ONLY_RE.search(msg):
             _members_only[0] = True
+        if _BOT_CHECK_RE.search(msg):
+            _bot_check[0] = True
         if log_callback:
             log_callback(msg)
 
@@ -138,6 +143,9 @@ def _fetch_via_ytdlp(
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.download([url])
+
+    if _bot_check[0]:
+        raise BotCheckError(f"Bot check triggered for transcript: {video_id}")
 
     if _members_only[0]:
         raise MembersOnlyError(f"Members-only video: {video_id}")

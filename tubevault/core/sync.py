@@ -15,7 +15,7 @@ from tubevault.core.database import (
     upsert_video,
     video_dir,
 )
-from tubevault.core.downloader import MembersOnlyError, download_video, fetch_channel_videos
+from tubevault.core.downloader import BotCheckError, MembersOnlyError, download_video, fetch_channel_videos
 from tubevault.core.summarizer import generate_summary
 from tubevault.core.transcript import fetch_transcript
 from tubevault.utils.helpers import load_proxy_url
@@ -27,6 +27,10 @@ INTER_REQUEST_DELAY = 10
 
 # Number of concurrent download threads when a proxy is configured.
 PROXY_CONCURRENCY = 4
+
+# Maximum number of immediate retries when YouTube serves a bot-check
+# challenge.  Each retry uses a fresh proxy connection (new IP).
+MAX_BOT_CHECK_RETRIES = 5
 
 
 @dataclass
@@ -203,26 +207,35 @@ async def _process_video(
         using_proxy = bool(load_proxy_url())
         mp4_path = None
 
-        try:
-            mp4_path = await download_video(
-                channel_name,
-                video_id,
-                quality=quality,
-                progress_callback=lambda p, d, t: _update_download(vp, p, d, t, prog, callback),
-                log_callback=log_callback,
-            )
-            if mp4_path is None:
-                _log(log_callback, f"Download returned no file for {video_id}")
-        except MembersOnlyError:
-            _log(log_callback, f"Members-only video: {video_id} — skipping permanently")
-            upsert_video(channel_name, {"video_id": video_id, "members_only": True})
-            vp.download = -1.0
-            vp.transcript = "skipped"
-            vp.summary = "skipped"
-            _emit(callback, prog)
-            return
-        except Exception as exc:
-            _log(log_callback, f"Download error for {video_id}: {exc}")
+        for _attempt in range(MAX_BOT_CHECK_RETRIES + 1):
+            try:
+                mp4_path = await download_video(
+                    channel_name,
+                    video_id,
+                    quality=quality,
+                    progress_callback=lambda p, d, t: _update_download(vp, p, d, t, prog, callback),
+                    log_callback=log_callback,
+                )
+                if mp4_path is None:
+                    _log(log_callback, f"Download returned no file for {video_id}")
+                break
+            except MembersOnlyError:
+                _log(log_callback, f"Members-only video: {video_id} — skipping permanently")
+                upsert_video(channel_name, {"video_id": video_id, "members_only": True})
+                vp.download = -1.0
+                vp.transcript = "skipped"
+                vp.summary = "skipped"
+                _emit(callback, prog)
+                return
+            except BotCheckError:
+                if _attempt < MAX_BOT_CHECK_RETRIES:
+                    _log(log_callback, f"Bot check — retrying download with new IP ({_attempt + 1}/{MAX_BOT_CHECK_RETRIES})…")
+                else:
+                    _log(log_callback, f"Bot check: gave up download after {MAX_BOT_CHECK_RETRIES} retries for {video_id}")
+                    break
+            except Exception as exc:
+                _log(log_callback, f"Download error for {video_id}: {exc}")
+                break
 
         # Pause between requests when not using a proxy.
         if not using_proxy:
@@ -256,15 +269,24 @@ async def _process_video(
         _log(log_callback, f"Fetching transcript for {video_id}…")
         vp.transcript = "in_progress"
         _emit(callback, prog)
-        try:
-            segments = await fetch_transcript(channel_name, video_id, log_callback=log_callback)
-        except MembersOnlyError:
-            _log(log_callback, f"Members-only video: {video_id} — skipping permanently")
-            upsert_video(channel_name, {"video_id": video_id, "members_only": True})
-            vp.transcript = "skipped"
-            vp.summary = "skipped"
-            _emit(callback, prog)
-            return
+        segments = None
+        for _attempt in range(MAX_BOT_CHECK_RETRIES + 1):
+            try:
+                segments = await fetch_transcript(channel_name, video_id, log_callback=log_callback)
+                break
+            except MembersOnlyError:
+                _log(log_callback, f"Members-only video: {video_id} — skipping permanently")
+                upsert_video(channel_name, {"video_id": video_id, "members_only": True})
+                vp.transcript = "skipped"
+                vp.summary = "skipped"
+                _emit(callback, prog)
+                return
+            except BotCheckError:
+                if _attempt < MAX_BOT_CHECK_RETRIES:
+                    _log(log_callback, f"Bot check — retrying transcript with new IP ({_attempt + 1}/{MAX_BOT_CHECK_RETRIES})…")
+                else:
+                    _log(log_callback, f"Bot check: gave up transcript after {MAX_BOT_CHECK_RETRIES} retries for {video_id}")
+                    break
         if segments:
             save_transcript(channel_name, video_id, segments)
             upsert_video(channel_name, {"video_id": video_id, "has_transcript": True})

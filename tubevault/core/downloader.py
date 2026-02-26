@@ -23,9 +23,16 @@ _PROGRESS_RE = re.compile(r"\[download\].*?(?:\d+\.\d+%|ETA|at\s+\d)")
 # Members-only restriction message emitted by yt-dlp via its error logger.
 _MEMBERS_ONLY_RE = re.compile(r"available to this channel.s members", re.IGNORECASE)
 
+# Bot-check challenge message emitted by yt-dlp via its error logger.
+_BOT_CHECK_RE = re.compile(r"Sign in to confirm you.re not a bot", re.IGNORECASE)
+
 
 class MembersOnlyError(Exception):
     """Raised when a video is restricted to channel members only."""
+
+
+class BotCheckError(Exception):
+    """Raised when YouTube serves a bot-verification challenge."""
 
 
 class _YdlLogger:
@@ -283,9 +290,13 @@ def _download_sync(
     """Synchronous yt-dlp download."""
     _members_only: list[bool] = [False]
 
+    _bot_check: list[bool] = [False]
+
     def _wrapped_log(msg: str) -> None:
         if _MEMBERS_ONLY_RE.search(msg):
             _members_only[0] = True
+        if _BOT_CHECK_RE.search(msg):
+            _bot_check[0] = True
         if log_callback:
             log_callback(msg)
 
@@ -307,6 +318,9 @@ def _download_sync(
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
+
+    if _bot_check[0]:
+        raise BotCheckError(f"Bot check triggered for: {url}")
 
     if _members_only[0]:
         raise MembersOnlyError(f"Members-only video: {url}")
