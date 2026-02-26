@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import math
 import re
 from pathlib import Path
 from typing import Any, Callable
@@ -151,7 +152,28 @@ def _fetch_channel_videos_sync(
     if proxy:
         opts["proxy"] = proxy
     if log_callback:
-        opts["logger"] = _YdlLogger(log_callback)
+        # Intercept yt-dlp log messages to enhance "Downloading API JSON page N"
+        # with the total page count when yt-dlp announces it upfront.
+        _est_pages: list[int] = [0]  # mutable cell: estimated total pages
+
+        def _page_log(msg: str) -> None:
+            # yt-dlp sometimes announces total entry count before paginating,
+            # e.g. "[youtube:tab] channel: Downloading 187 video metadata entries"
+            m = re.search(r"Downloading (\d+) video", msg)
+            if m and not _est_pages[0]:
+                _est_pages[0] = math.ceil(int(m.group(1)) / 30)
+
+            # Rewrite per-page messages to include total.
+            mp = re.search(r"Downloading API JSON page (\d+)", msg)
+            if mp:
+                page_num = int(mp.group(1))
+                total_str = f" / {_est_pages[0]}" if _est_pages[0] else ""
+                log_callback(f"Downloading API JSON page {page_num}{total_str}")
+                return
+
+            log_callback(msg)
+
+        opts["logger"] = _YdlLogger(_page_log)
 
     results = []
     with yt_dlp.YoutubeDL(opts) as ydl:
