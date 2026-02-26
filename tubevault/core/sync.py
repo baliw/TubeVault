@@ -333,23 +333,33 @@ async def sync_all_channels(
     )
     _emit(progress_callback, prog)
 
-    # --- Phase 1: fetch video lists sequentially to avoid rate-limiting ---
+    # --- Phase 1: fetch all channel video lists in parallel ---
+    # Each channel is assigned a slot index so its fetch logs appear in the
+    # correct quadrant immediately.  Fetches run concurrently; results are
+    # collected before processing begins.
     channel_queues: dict[str, list[dict[str, Any]]] = {}
     channel_quality: dict[str, str] = {}
 
-    for ch in channels_cfg:
-        if not ch.get("auto_sync", True):
-            continue
+    auto_sync_channels = [ch for ch in channels_cfg if ch.get("auto_sync", True)]
+
+    async def _fetch_one(ch: dict[str, Any], slot_idx: int) -> None:
         ch_name = ch["name"]
         ch_url = ch["url"]
         quality = QUALITY_MAP.get(ch.get("quality", "high"), "1080p")
 
-        _log(log_callback, f"=== Fetching video list: {ch_name} ===")
+        def _slog(msg: Any) -> None:
+            if slot_log_callback:
+                try:
+                    slot_log_callback(slot_idx, msg)
+                except Exception:
+                    pass
+
+        _slog(f"=== Fetching video list: {ch_name} ===")
         try:
-            remote_videos = await fetch_channel_videos(ch_url, log_callback=log_callback)
+            remote_videos = await fetch_channel_videos(ch_url, log_callback=_slog)
         except Exception as exc:
-            _log(log_callback, f"ERROR fetching {ch_name}: {exc}")
-            continue
+            _slog(f"ERROR fetching {ch_name}: {exc}")
+            return
 
         library = load_library(ch_name)
         existing_ids = {v["video_id"] for v in library.get("videos", [])}
@@ -366,9 +376,14 @@ async def sync_all_channels(
         if to_process:
             channel_queues[ch_name] = to_process
             channel_quality[ch_name] = quality
-            _log(log_callback, f"{ch_name}: {len(new_videos)} new, {len(backfill)} to backfill")
+            _slog(f"{ch_name}: {len(new_videos)} new, {len(backfill)} to backfill")
         else:
-            _log(log_callback, f"{ch_name}: up to date")
+            _slog(f"{ch_name}: up to date")
+
+    await asyncio.gather(*[
+        _fetch_one(ch, i % NUM_SLOTS)
+        for i, ch in enumerate(auto_sync_channels)
+    ])
 
     prog.total = sum(len(q) for q in channel_queues.values())
     _emit(progress_callback, prog)
