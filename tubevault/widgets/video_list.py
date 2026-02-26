@@ -9,6 +9,18 @@ from textual.reactive import reactive
 from textual.widgets import ListItem, ListView, Label
 
 
+def _fmt_date(raw: str) -> str:
+    """Convert a YYYY-MM-DD upload date to 'Mon DD YYYY' in local time."""
+    if not raw:
+        return ""
+    try:
+        from datetime import date
+        d = date.fromisoformat(raw[:10])
+        return d.strftime("%b %d %Y")
+    except ValueError:
+        return raw
+
+
 STATUS_ICONS = {
     "video": ("✓", "✗"),
     "transcript": ("✓", "✗"),
@@ -84,21 +96,23 @@ class VideoList(ListView):
         from tubevault.utils.helpers import format_duration
 
         title = video.get("title", video["video_id"])
-        date = video.get("upload_date", "")
         duration = format_duration(video.get("duration_seconds", 0))
 
         v_icon = "✓" if video.get("has_video") else "·"
         t_icon = "✓" if video.get("has_transcript") else "·"
         s_icon = "✓" if video.get("has_summary") else "·"
 
+        # Format upload date as "MMM DD YYYY" in local timezone.
+        date_str = _fmt_date(video.get("upload_date", ""))
+
         # Truncate long titles for display
-        max_title = 60
+        max_title = 52
         display_title = title if len(title) <= max_title else title[: max_title - 1] + "…"
 
         text = Text()
-        text.append(f"{display_title:<62}", style="bold white")
-        text.append(f"  {date}  ", style="dim")
-        text.append(f"{duration:>8}  ", style="cyan")
+        text.append(f"{display_title:<54}", style="bold white")
+        text.append(f"  {date_str:<12}", style="cyan")
+        text.append(f"  {duration:>8}  ", style="dim")
         text.append(f"V{v_icon} ", style="green" if video.get("has_video") else "red")
         text.append(f"T{t_icon} ", style="green" if video.get("has_transcript") else "red")
         text.append(f"S{s_icon}", style="green" if video.get("has_summary") else "red")
@@ -120,6 +134,12 @@ class VideoList(ListView):
         elif event.key == "s":
             event.stop()
             self.post_message(self.SyncRequested())
+        elif event.key in ("ctrl+down", "cmd+down"):
+            event.stop()
+            self.index = min(idx + 10, len(self._videos) - 1)
+        elif event.key in ("ctrl+up", "cmd+up"):
+            event.stop()
+            self.index = max(idx - 10, 0)
 
     def filter(self, query: str) -> None:
         """Filter displayed videos by title substring (case-insensitive).
