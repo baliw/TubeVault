@@ -1,6 +1,7 @@
 """Textual App root for TubeVault."""
 
 import logging
+import os
 from typing import Any
 
 from textual.app import App, ComposeResult
@@ -79,3 +80,10 @@ class TubeVaultApp(App):
     # ------------------------------------------------------------------ Cleanup
     def on_unmount(self) -> None:
         cleanup_temp_files()
+        if self.sync_running:
+            # yt-dlp creates ThreadPoolExecutors internally; Python's atexit
+            # handler waits for them to finish, which stalls the terminal for
+            # as long as the in-progress download takes.  Force-exit skips
+            # those atexit waits while still reaching this point for any real
+            # cleanup (temp files above, Textual's own teardown, etc.).
+            os._exit(0)

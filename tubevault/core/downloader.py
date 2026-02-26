@@ -74,6 +74,11 @@ def _ydl_opts_base(
         "ignoreerrors": False,
         "retries": 0,
         "fragment_retries": 0,
+        # Force sequential fragment downloads so yt-dlp never creates an
+        # internal ThreadPoolExecutor.  Python's concurrent.futures registers
+        # an atexit handler that blocks until every executor finishes — which
+        # would stall the terminal prompt after the app exits mid-download.
+        "concurrent_fragment_downloads": 1,
         # Always suppress direct terminal writes; the custom logger handles
         # all message output independently of these flags.
         "quiet": True,
