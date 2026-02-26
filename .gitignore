@@ -29,6 +29,7 @@ credentials
 credentials/
 credentials.*
 proxy.conf
+proxy.bak
 
 # macOS
 .DS_Store
