@@ -168,12 +168,18 @@ def _fetch_channel_videos_sync(
             if m and not _est_pages[0]:
                 _est_pages[0] = math.ceil(int(m.group(1)) / 30)
 
-            # Rewrite per-page messages to include total.
-            mp = re.search(r"Downloading API JSON page (\d+)", msg)
+            # Actual format: "... page N: Downloading API JSON"
+            # Rewrite to:    "... page N / M: Downloading API JSON"
+            mp = re.search(r"page (\d+): Downloading API JSON", msg)
             if mp:
                 page_num = int(mp.group(1))
                 total_str = f" / {_est_pages[0]}" if _est_pages[0] else ""
-                log_callback(f"Downloading API JSON page {page_num}{total_str}")
+                rewritten = re.sub(
+                    r"page \d+: Downloading API JSON",
+                    f"page {page_num}{total_str}: Downloading API JSON",
+                    msg,
+                )
+                log_callback(rewritten)
                 return
 
             log_callback(msg)
