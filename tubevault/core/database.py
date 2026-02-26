@@ -109,17 +109,10 @@ def _backup_json(path: Path) -> None:
 # Library — paginated page files
 # ---------------------------------------------------------------------------
 
-def list_library_page_nums(channel_name: str) -> list[int]:
-    """Return sorted list of existing library page numbers (1-based).
+def _list_page_nums_raw(channel_name: str) -> list[int]:
+    """Glob for library_NNN.json files without triggering migration.
 
-    Does NOT trigger migration — callers that need migration should call
-    _migrate_library_if_needed first.
-
-    Args:
-        channel_name: Channel slug.
-
-    Returns:
-        Ascending list of page numbers for which library_NNN.json exists.
+    Used internally by _migrate_library_if_needed to avoid circular calls.
     """
     cdir = channel_dir(channel_name)
     nums: list[int] = []
@@ -128,6 +121,21 @@ def list_library_page_nums(channel_name: str) -> list[int]:
         if m:
             nums.append(int(m.group(1)))
     return sorted(nums)
+
+
+def list_library_page_nums(channel_name: str) -> list[int]:
+    """Return sorted list of existing library page numbers (1-based).
+
+    Triggers migration from legacy library.json if it has not yet happened.
+
+    Args:
+        channel_name: Channel slug.
+
+    Returns:
+        Ascending list of page numbers for which library_NNN.json exists.
+    """
+    _migrate_library_if_needed(channel_name)
+    return _list_page_nums_raw(channel_name)
 
 
 def _migrate_library_if_needed(channel_name: str) -> None:
@@ -142,7 +150,7 @@ def _migrate_library_if_needed(channel_name: str) -> None:
     if not legacy.exists():
         return  # Nothing to migrate
 
-    existing_pages = list_library_page_nums(channel_name)
+    existing_pages = _list_page_nums_raw(channel_name)
     if existing_pages:
         # Migration already completed; clean up the old file.
         _backup_json(legacy)

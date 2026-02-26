@@ -81,42 +81,55 @@ class LibraryBrowserScreen(Screen):
         The highest-numbered page (newest videos) is shown first so the UI
         is interactive before all pages have been read from disk.  Older pages
         are appended to the bottom of the list as they load.
+
+        All file I/O runs on a daemon thread so the event loop (and therefore
+        key bindings) remain responsive throughout.
         """
         import asyncio
+        from tubevault.utils.helpers import run_in_daemon_thread
 
-        page_nums = list_library_page_nums(self._channel_name)
-        if not page_nums:
-            return
-
-        video_list = self.query_one("#all_list", VideoList)
-        total_pages = len(page_nums)
-        self._all_videos = []
-
-        for batch_idx, pn in enumerate(reversed(page_nums)):
-            page = load_library_page(self._channel_name, pn)
-            videos = sorted(
-                page.get("videos", []),
-                key=lambda v: v.get("upload_date", ""),
-                reverse=True,
+        try:
+            # list_library_page_nums triggers migration if needed; run it on a
+            # thread so any file writes don't block the event loop.
+            page_nums = await run_in_daemon_thread(
+                list_library_page_nums, self._channel_name
             )
-            self._all_videos.extend(videos)
+            if not page_nums:
+                return
 
-            if batch_idx == 0:
-                video_list.set_videos(videos)
-            else:
-                video_list.append_videos(videos)
+            video_list = self.query_one("#all_list", VideoList)
+            total_pages = len(page_nums)
+            self._all_videos = []
 
-            # Yield between pages so the UI can render each batch before
-            # the next disk read starts.
-            if batch_idx < total_pages - 1:
-                remaining = total_pages - batch_idx - 1
-                self._set_status(
-                    f"Loading… {remaining} more page{'s' if remaining != 1 else ''}"
+            for batch_idx, pn in enumerate(reversed(page_nums)):
+                page = await run_in_daemon_thread(
+                    load_library_page, self._channel_name, pn
                 )
-                await asyncio.sleep(0)
+                videos = sorted(
+                    page.get("videos", []),
+                    key=lambda v: v.get("upload_date", ""),
+                    reverse=True,
+                )
+                self._all_videos.extend(videos)
 
-        if total_pages > 1:
-            self._set_status("")
+                if batch_idx == 0:
+                    video_list.set_videos(videos)
+                else:
+                    video_list.append_videos(videos)
+
+                # Yield between pages so the UI can render each batch.
+                if batch_idx < total_pages - 1:
+                    remaining = total_pages - batch_idx - 1
+                    self._set_status(
+                        f"Loading… {remaining} more page{'s' if remaining != 1 else ''}"
+                    )
+                    await asyncio.sleep(0)
+
+            if total_pages > 1:
+                self._set_status("")
+
+        except Exception as exc:
+            logger.error("Error loading library pages for %s: %s", self._channel_name, exc, exc_info=True)
 
     def _load_collection(self) -> None:
         collection = load_collection(self._channel_name)
