@@ -90,7 +90,7 @@ class TubeVaultApp(App):
             sys.stdout.write("\x1b[?25h")  # re-enable cursor before hard exit
             sys.stdout.flush()
             os._exit(0)
-        super().action_quit()
+        self.exit()
 
     def on_unmount(self) -> None:
         cleanup_temp_files()
