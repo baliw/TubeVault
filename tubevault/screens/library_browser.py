@@ -13,8 +13,10 @@ from tubevault.core.database import (
     collection_add_video,
     collection_insert_header,
     collection_set_note,
+    list_library_page_nums,
     load_collection,
     load_library,
+    load_library_page,
 )
 from tubevault.widgets.collection_list import CollectionList
 from tubevault.widgets.search_bar import SearchBar
@@ -70,18 +72,51 @@ class LibraryBrowserScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self._load_all()
+        self.run_worker(self._load_all_progressive(), exclusive=False)
         self._load_collection()
 
-    def _load_all(self) -> None:
-        library = load_library(self._channel_name)
-        videos = sorted(
-            library.get("videos", []),
-            key=lambda v: v.get("upload_date", ""),
-            reverse=True,
-        )
-        self._all_videos = videos
-        self.query_one("#all_list", VideoList).set_videos(videos)
+    async def _load_all_progressive(self) -> None:
+        """Load library pages newest-first, rendering each batch immediately.
+
+        The highest-numbered page (newest videos) is shown first so the UI
+        is interactive before all pages have been read from disk.  Older pages
+        are appended to the bottom of the list as they load.
+        """
+        import asyncio
+
+        page_nums = list_library_page_nums(self._channel_name)
+        if not page_nums:
+            return
+
+        video_list = self.query_one("#all_list", VideoList)
+        total_pages = len(page_nums)
+        self._all_videos = []
+
+        for batch_idx, pn in enumerate(reversed(page_nums)):
+            page = load_library_page(self._channel_name, pn)
+            videos = sorted(
+                page.get("videos", []),
+                key=lambda v: v.get("upload_date", ""),
+                reverse=True,
+            )
+            self._all_videos.extend(videos)
+
+            if batch_idx == 0:
+                video_list.set_videos(videos)
+            else:
+                video_list.append_videos(videos)
+
+            # Yield between pages so the UI can render each batch before
+            # the next disk read starts.
+            if batch_idx < total_pages - 1:
+                remaining = total_pages - batch_idx - 1
+                self._set_status(
+                    f"Loading… {remaining} more page{'s' if remaining != 1 else ''}"
+                )
+                await asyncio.sleep(0)
+
+        if total_pages > 1:
+            self._set_status("")
 
     def _load_collection(self) -> None:
         collection = load_collection(self._channel_name)

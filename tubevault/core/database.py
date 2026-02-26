@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,9 @@ from typing import Any
 from tubevault.utils.helpers import ensure_dir, tubevault_root
 
 logger = logging.getLogger(__name__)
+
+# Maximum number of video entries stored in a single library page file.
+LIBRARY_PAGE_SIZE = 100
 
 EMPTY_LIBRARY: dict[str, Any] = {
     "channel_name": "",
@@ -37,8 +41,21 @@ def channel_dir(channel_name: str) -> Path:
     return path
 
 
-def library_path(channel_name: str) -> Path:
-    """Return the path to library.json for a channel."""
+def library_page_path(channel_name: str, page_num: int) -> Path:
+    """Return the path to a numbered library page file.
+
+    Args:
+        channel_name: Channel slug.
+        page_num: 1-based page number.
+
+    Returns:
+        Path to library_NNN.json.
+    """
+    return channel_dir(channel_name) / f"library_{page_num:03d}.json"
+
+
+def _legacy_library_path(channel_name: str) -> Path:
+    """Return the path to the legacy library.json file."""
     return channel_dir(channel_name) / "library.json"
 
 
@@ -89,37 +106,149 @@ def _backup_json(path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Library
+# Library — paginated page files
 # ---------------------------------------------------------------------------
 
-def load_library(channel_name: str) -> dict[str, Any]:
-    """Load library.json for a channel.
+def list_library_page_nums(channel_name: str) -> list[int]:
+    """Return sorted list of existing library page numbers (1-based).
+
+    Does NOT trigger migration — callers that need migration should call
+    _migrate_library_if_needed first.
 
     Args:
         channel_name: Channel slug.
 
     Returns:
-        Library dict.
+        Ascending list of page numbers for which library_NNN.json exists.
     """
+    cdir = channel_dir(channel_name)
+    nums: list[int] = []
+    for p in cdir.glob("library_*.json"):
+        m = re.match(r"^library_(\d+)\.json$", p.name)
+        if m:
+            nums.append(int(m.group(1)))
+    return sorted(nums)
+
+
+def _migrate_library_if_needed(channel_name: str) -> None:
+    """One-time migration: split legacy library.json into library_NNN.json pages.
+
+    Safe to call repeatedly — exits immediately once migration is done.
+
+    Args:
+        channel_name: Channel slug.
+    """
+    legacy = _legacy_library_path(channel_name)
+    if not legacy.exists():
+        return  # Nothing to migrate
+
+    existing_pages = list_library_page_nums(channel_name)
+    if existing_pages:
+        # Migration already completed; clean up the old file.
+        _backup_json(legacy)
+        try:
+            legacy.unlink()
+        except OSError:
+            pass
+        return
+
+    logger.info("Migrating library.json → paged format for channel %s", channel_name)
     default = {**EMPTY_LIBRARY, "channel_name": channel_name}
-    data = _load_json(library_path(channel_name), default)
+    data = _load_json(legacy, default)
+    videos = sorted(data.get("videos", []), key=lambda v: v.get("upload_date", ""))
+    last_synced = data.get("last_synced")
+    ch_name = data.get("channel_name", channel_name)
+
+    if videos:
+        for chunk_start in range(0, len(videos), LIBRARY_PAGE_SIZE):
+            page_num = chunk_start // LIBRARY_PAGE_SIZE + 1
+            chunk = videos[chunk_start : chunk_start + LIBRARY_PAGE_SIZE]
+            # Store last_synced only on the highest (last-written) page so
+            # load_library's "last one wins" iteration picks it up correctly.
+            is_last_page = chunk_start + LIBRARY_PAGE_SIZE >= len(videos)
+            page_data: dict[str, Any] = {
+                "channel_name": ch_name,
+                "last_synced": last_synced if is_last_page else None,
+                "videos": chunk,
+            }
+            _save_json(library_page_path(channel_name, page_num), page_data)
+
+    # Remove the legacy file (back it up first).
+    _backup_json(legacy)
+    try:
+        legacy.unlink()
+    except OSError:
+        pass
+
+
+def load_library_page(channel_name: str, page_num: int) -> dict[str, Any]:
+    """Load a single library page file.
+
+    Args:
+        channel_name: Channel slug.
+        page_num: 1-based page number.
+
+    Returns:
+        Page dict with ``channel_name``, ``last_synced``, and ``videos`` keys.
+    """
+    _migrate_library_if_needed(channel_name)
+    default = {**EMPTY_LIBRARY, "channel_name": channel_name}
+    path = library_page_path(channel_name, page_num)
+    data = _load_json(path, default)
     data.setdefault("channel_name", channel_name)
     data.setdefault("videos", [])
     return data
 
 
-def save_library(channel_name: str, library: dict[str, Any]) -> None:
-    """Save library.json for a channel.
+def save_library_page(channel_name: str, page_num: int, data: dict[str, Any]) -> None:
+    """Save a single library page file.
 
     Args:
         channel_name: Channel slug.
-        library: Library dict to save.
+        page_num: 1-based page number.
+        data: Page dict to persist.
     """
-    _save_json(library_path(channel_name), library)
+    _save_json(library_page_path(channel_name, page_num), data)
+
+
+def load_library(channel_name: str) -> dict[str, Any]:
+    """Load the complete library by merging all page files.
+
+    For progressive / incremental loading in the UI, use
+    ``list_library_page_nums`` + ``load_library_page`` directly.
+
+    Args:
+        channel_name: Channel slug.
+
+    Returns:
+        Merged library dict with all videos across all pages.
+    """
+    _migrate_library_if_needed(channel_name)
+    page_nums = list_library_page_nums(channel_name)
+
+    if not page_nums:
+        return {**EMPTY_LIBRARY, "channel_name": channel_name}
+
+    all_videos: list[dict[str, Any]] = []
+    last_synced: str | None = None
+
+    for pn in page_nums:
+        page = load_library_page(channel_name, pn)
+        all_videos.extend(page.get("videos", []))
+        if page.get("last_synced"):
+            last_synced = page["last_synced"]  # highest page wins
+
+    return {
+        "channel_name": channel_name,
+        "last_synced": last_synced,
+        "videos": all_videos,
+    }
 
 
 def get_video_entry(channel_name: str, video_id: str) -> dict[str, Any] | None:
     """Retrieve a single video entry from the library.
+
+    Searches pages from newest to oldest for efficiency.
 
     Args:
         channel_name: Channel slug.
@@ -128,41 +257,85 @@ def get_video_entry(channel_name: str, video_id: str) -> dict[str, Any] | None:
     Returns:
         Video entry dict, or None if not found.
     """
-    library = load_library(channel_name)
-    for video in library["videos"]:
-        if video["video_id"] == video_id:
-            return video
+    _migrate_library_if_needed(channel_name)
+    for pn in reversed(list_library_page_nums(channel_name)):
+        page = load_library_page(channel_name, pn)
+        for v in page.get("videos", []):
+            if v["video_id"] == video_id:
+                return v
     return None
 
 
 def upsert_video(channel_name: str, entry: dict[str, Any]) -> None:
-    """Insert or update a video entry in library.json.
+    """Insert or update a video entry across the paginated library files.
+
+    - If the video already exists in any page, that page is updated in-place.
+    - If the video is new, it is appended to the highest-numbered page (or a
+      new page is created if the last page is already at capacity).
 
     Args:
         channel_name: Channel slug.
         entry: Video entry dict containing at minimum ``video_id``.
     """
-    library = load_library(channel_name)
-    videos = library["videos"]
-    for i, v in enumerate(videos):
-        if v["video_id"] == entry["video_id"]:
-            videos[i] = {**v, **entry}
-            save_library(channel_name, library)
-            return
+    _migrate_library_if_needed(channel_name)
+    video_id = entry["video_id"]
+    page_nums = list_library_page_nums(channel_name)
+
+    # Search existing pages, newest first (most likely to have recent videos).
+    for pn in reversed(page_nums):
+        page = load_library_page(channel_name, pn)
+        for i, v in enumerate(page["videos"]):
+            if v["video_id"] == video_id:
+                page["videos"][i] = {**v, **entry}
+                save_library_page(channel_name, pn, page)
+                return
+
+    # New video — add to the last page or create a new one.
     entry.setdefault("added_date", datetime.now(timezone.utc).isoformat())
-    videos.append(entry)
-    save_library(channel_name, library)
+
+    if not page_nums:
+        _save_json(
+            library_page_path(channel_name, 1),
+            {"channel_name": channel_name, "last_synced": None, "videos": [entry]},
+        )
+        return
+
+    last_pn = page_nums[-1]
+    last_page = load_library_page(channel_name, last_pn)
+
+    if len(last_page["videos"]) < LIBRARY_PAGE_SIZE:
+        last_page["videos"].append(entry)
+        save_library_page(channel_name, last_pn, last_page)
+    else:
+        new_pn = last_pn + 1
+        _save_json(
+            library_page_path(channel_name, new_pn),
+            {"channel_name": channel_name, "last_synced": None, "videos": [entry]},
+        )
 
 
 def mark_library_synced(channel_name: str) -> None:
-    """Update last_synced timestamp in library.json.
+    """Update last_synced timestamp in the highest-numbered library page.
 
     Args:
         channel_name: Channel slug.
     """
-    library = load_library(channel_name)
-    library["last_synced"] = datetime.now(timezone.utc).isoformat()
-    save_library(channel_name, library)
+    _migrate_library_if_needed(channel_name)
+    page_nums = list_library_page_nums(channel_name)
+    now = datetime.now(timezone.utc).isoformat()
+
+    if not page_nums:
+        # No videos yet; create page 1 to record the sync timestamp.
+        _save_json(
+            library_page_path(channel_name, 1),
+            {"channel_name": channel_name, "last_synced": now, "videos": []},
+        )
+        return
+
+    highest = page_nums[-1]
+    page = load_library_page(channel_name, highest)
+    page["last_synced"] = now
+    save_library_page(channel_name, highest, page)
 
 
 # ---------------------------------------------------------------------------

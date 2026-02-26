@@ -44,6 +44,7 @@ class VideoList(ListView):
     def __init__(self, videos: list[dict[str, Any]] | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._videos: list[dict[str, Any]] = videos or []
+        self._current_filter: str = ""
 
     def on_mount(self) -> None:
         self._rebuild()
@@ -54,14 +55,30 @@ class VideoList(ListView):
         Args:
             videos: New list of video entry dicts.
         """
-        self._videos = videos
+        self._videos = list(videos)
         self._rebuild()
 
+    def append_videos(self, videos: list[dict[str, Any]]) -> None:
+        """Append additional videos to the bottom of the list.
+
+        Respects any active filter — only appends entries that match.
+
+        Args:
+            videos: Video entries to add (already sorted in display order).
+        """
+        self._videos.extend(videos)
+        q = self._current_filter.lower()
+        for video in videos:
+            if not q or q in video.get("title", "").lower():
+                self.append(self._make_item(video))
+
     def _rebuild(self) -> None:
-        """Clear and repopulate the list items."""
+        """Clear and repopulate the list items, respecting active filter."""
         self.clear()
+        q = self._current_filter.lower()
         for video in self._videos:
-            self.append(self._make_item(video))
+            if not q or q in video.get("title", "").lower():
+                self.append(self._make_item(video))
 
     def _make_item(self, video: dict[str, Any]) -> ListItem:
         from tubevault.utils.helpers import format_duration
@@ -110,8 +127,5 @@ class VideoList(ListView):
         Args:
             query: Search string.
         """
-        q = query.lower()
-        filtered = [v for v in self._videos if q in v.get("title", "").lower()] if q else self._videos
-        self.clear()
-        for video in filtered:
-            self.append(self._make_item(video))
+        self._current_filter = query
+        self._rebuild()
