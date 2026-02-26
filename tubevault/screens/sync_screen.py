@@ -192,7 +192,12 @@ class SyncSlot(Widget):
         try:
             log = self.query_one(f"#slot_log_{self._slot_idx}", RichLog)
             if log.is_mounted:
-                log.write(msg if isinstance(msg, Text) else Text(str(msg)))
+                if isinstance(msg, Text):
+                    log.write(msg)
+                else:
+                    # Use from_ansi so yt-dlp's ANSI color codes are converted
+                    # to Rich styling rather than rendered as raw ESC characters.
+                    log.write(Text.from_ansi(str(msg)))
         except Exception:
             pass
 
