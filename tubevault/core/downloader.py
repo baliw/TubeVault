@@ -20,6 +20,13 @@ LogCallback = Callable[[str], None]
 # progress bar instead).
 _PROGRESS_RE = re.compile(r"\[download\].*?(?:\d+\.\d+%|ETA|at\s+\d)")
 
+# Members-only restriction message emitted by yt-dlp via its error logger.
+_MEMBERS_ONLY_RE = re.compile(r"available to this channel.s members", re.IGNORECASE)
+
+
+class MembersOnlyError(Exception):
+    """Raised when a video is restricted to channel members only."""
+
 
 class _YdlLogger:
     """Custom yt-dlp logger that forwards messages to a TUI log callback.
@@ -274,7 +281,15 @@ def _download_sync(
     log_callback: LogCallback | None,
 ) -> Path | None:
     """Synchronous yt-dlp download."""
-    opts = _ydl_opts_base(out_dir, quality, log_callback=log_callback)
+    _members_only: list[bool] = [False]
+
+    def _wrapped_log(msg: str) -> None:
+        if _MEMBERS_ONLY_RE.search(msg):
+            _members_only[0] = True
+        if log_callback:
+            log_callback(msg)
+
+    opts = _ydl_opts_base(out_dir, quality, log_callback=_wrapped_log)
 
     if progress_callback:
         def _hook(d: dict[str, Any]) -> None:
@@ -292,6 +307,9 @@ def _download_sync(
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
+
+    if _members_only[0]:
+        raise MembersOnlyError(f"Members-only video: {url}")
 
     if not info:
         return None

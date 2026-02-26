@@ -25,6 +25,9 @@ from tubevault.widgets.video_list import VideoList
 
 logger = logging.getLogger(__name__)
 
+# Number of ListItems to append per event-loop tick during progressive loading.
+_APPEND_CHUNK = 20
+
 
 class LibraryBrowserScreen(Screen):
     """Main screen: two-tab browser for a channel's video library.
@@ -78,19 +81,19 @@ class LibraryBrowserScreen(Screen):
     async def _load_all_progressive(self) -> None:
         """Load library pages newest-first, rendering each batch immediately.
 
-        The highest-numbered page (newest videos) is shown first so the UI
-        is interactive before all pages have been read from disk.  Older pages
-        are appended to the bottom of the list as they load.
+        Pages are loaded from highest-numbered (newest videos) down to page 1
+        (oldest), so the most recent videos appear at the top of the list and
+        are usable before older pages have been read.
 
-        All file I/O runs on a daemon thread so the event loop (and therefore
-        key bindings) remain responsive throughout.
+        All file I/O runs on a daemon thread.  Within each page, videos are
+        appended to the ListView in chunks of _APPEND_CHUNK, yielding the
+        event loop between each chunk so key presses (navigation, Enter to
+        open a video) are processed even while loading is in progress.
         """
         import asyncio
         from tubevault.utils.helpers import run_in_daemon_thread
 
         try:
-            # list_library_page_nums triggers migration if needed; run it on a
-            # thread so any file writes don't block the event loop.
             page_nums = await run_in_daemon_thread(
                 list_library_page_nums, self._channel_name
             )
@@ -100,11 +103,14 @@ class LibraryBrowserScreen(Screen):
             video_list = self.query_one("#all_list", VideoList)
             total_pages = len(page_nums)
             self._all_videos = []
+            is_first_chunk = True
 
             for batch_idx, pn in enumerate(reversed(page_nums)):
                 page = await run_in_daemon_thread(
                     load_library_page, self._channel_name, pn
                 )
+                # Sort newest-first within each page so higher-numbered pages
+                # (always newer) appear above lower-numbered pages.
                 videos = sorted(
                     page.get("videos", []),
                     key=lambda v: v.get("upload_date", ""),
@@ -112,24 +118,31 @@ class LibraryBrowserScreen(Screen):
                 )
                 self._all_videos.extend(videos)
 
-                if batch_idx == 0:
-                    video_list.set_videos(videos)
-                else:
-                    video_list.append_videos(videos)
+                # Append in small chunks, yielding between each so the event
+                # loop can process key events while the list is being built.
+                for chunk_start in range(0, len(videos), _APPEND_CHUNK):
+                    chunk = videos[chunk_start : chunk_start + _APPEND_CHUNK]
+                    if is_first_chunk:
+                        video_list.set_videos(chunk)
+                        is_first_chunk = False
+                    else:
+                        video_list.append_videos(chunk)
+                    await asyncio.sleep(0)
 
-                # Yield between pages so the UI can render each batch.
-                if batch_idx < total_pages - 1:
+                if total_pages > 1 and batch_idx < total_pages - 1:
                     remaining = total_pages - batch_idx - 1
                     self._set_status(
                         f"Loading… {remaining} more page{'s' if remaining != 1 else ''}"
                     )
-                    await asyncio.sleep(0)
 
             if total_pages > 1:
                 self._set_status("")
 
         except Exception as exc:
-            logger.error("Error loading library pages for %s: %s", self._channel_name, exc, exc_info=True)
+            logger.error(
+                "Error loading library pages for %s: %s",
+                self._channel_name, exc, exc_info=True,
+            )
 
     def _load_collection(self) -> None:
         collection = load_collection(self._channel_name)

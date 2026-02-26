@@ -15,7 +15,7 @@ from tubevault.core.database import (
     upsert_video,
     video_dir,
 )
-from tubevault.core.downloader import download_video, fetch_channel_videos
+from tubevault.core.downloader import MembersOnlyError, download_video, fetch_channel_videos
 from tubevault.core.summarizer import generate_summary
 from tubevault.core.transcript import fetch_transcript
 from tubevault.utils.helpers import load_proxy_url
@@ -121,7 +121,8 @@ async def sync_channel(
     new_videos = [v for v in remote_videos if v["video_id"] not in existing_ids]
     backfill_videos = [
         v for v in library.get("videos", [])
-        if not v.get("has_transcript") or not v.get("has_summary")
+        if (not v.get("has_transcript") or not v.get("has_summary"))
+        and not v.get("members_only")
     ]
 
     to_process = new_videos + backfill_videos
@@ -212,6 +213,14 @@ async def _process_video(
             )
             if mp4_path is None:
                 _log(log_callback, f"Download returned no file for {video_id}")
+        except MembersOnlyError:
+            _log(log_callback, f"Members-only video: {video_id} — skipping permanently")
+            upsert_video(channel_name, {"video_id": video_id, "members_only": True})
+            vp.download = -1.0
+            vp.transcript = "skipped"
+            vp.summary = "skipped"
+            _emit(callback, prog)
+            return
         except Exception as exc:
             _log(log_callback, f"Download error for {video_id}: {exc}")
 
@@ -247,7 +256,15 @@ async def _process_video(
         _log(log_callback, f"Fetching transcript for {video_id}…")
         vp.transcript = "in_progress"
         _emit(callback, prog)
-        segments = await fetch_transcript(channel_name, video_id, log_callback=log_callback)
+        try:
+            segments = await fetch_transcript(channel_name, video_id, log_callback=log_callback)
+        except MembersOnlyError:
+            _log(log_callback, f"Members-only video: {video_id} — skipping permanently")
+            upsert_video(channel_name, {"video_id": video_id, "members_only": True})
+            vp.transcript = "skipped"
+            vp.summary = "skipped"
+            _emit(callback, prog)
+            return
         if segments:
             save_transcript(channel_name, video_id, segments)
             upsert_video(channel_name, {"video_id": video_id, "has_transcript": True})
@@ -425,7 +442,8 @@ async def sync_all_channels(
         new_videos = [v for v in remote_videos if v["video_id"] not in existing_ids]
         backfill = [
             v for v in library.get("videos", [])
-            if not v.get("has_transcript") or not v.get("has_summary")
+            if (not v.get("has_transcript") or not v.get("has_summary"))
+            and not v.get("members_only")
         ]
         to_process = new_videos + backfill
 

@@ -98,9 +98,10 @@ class VideoList(ListView):
         title = video.get("title", video["video_id"])
         duration = format_duration(video.get("duration_seconds", 0))
 
-        v_icon = "✓" if video.get("has_video") else "·"
-        t_icon = "✓" if video.get("has_transcript") else "·"
-        s_icon = "✓" if video.get("has_summary") else "·"
+        members_only = video.get("members_only", False)
+        v_icon = "M" if members_only else ("✓" if video.get("has_video") else "·")
+        t_icon = "·" if members_only else ("✓" if video.get("has_transcript") else "·")
+        s_icon = "·" if members_only else ("✓" if video.get("has_summary") else "·")
 
         # Format upload date as "MMM DD YYYY" in local timezone.
         date_str = _fmt_date(video.get("upload_date", ""))
@@ -113,9 +114,9 @@ class VideoList(ListView):
         text.append(f"{display_title:<54}", style="bold white")
         text.append(f"  {date_str:<12}", style="cyan")
         text.append(f"  {duration:>8}  ", style="dim")
-        text.append(f"V{v_icon} ", style="green" if video.get("has_video") else "red")
-        text.append(f"T{t_icon} ", style="green" if video.get("has_transcript") else "red")
-        text.append(f"S{s_icon}", style="green" if video.get("has_summary") else "red")
+        text.append(f"V{v_icon} ", style="yellow" if members_only else ("green" if video.get("has_video") else "red"))
+        text.append(f"T{t_icon} ", style="dim" if members_only else ("green" if video.get("has_transcript") else "red"))
+        text.append(f"S{s_icon}", style="dim" if members_only else ("green" if video.get("has_summary") else "red"))
 
         return ListItem(Label(text), id=f"v_{video['video_id']}")
 

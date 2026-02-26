@@ -93,4 +93,7 @@ class TubeVaultApp(App):
         self.exit()
 
     def on_unmount(self) -> None:
+        import sys
+        sys.stdout.write("\x1b[?25h")
+        sys.stdout.flush()
         cleanup_temp_files()

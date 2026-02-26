@@ -62,6 +62,9 @@ async def fetch_transcript(
                 log_callback(f"Subtitles fetched via yt-dlp ({len(segments)} segments)")
             return segments
     except Exception as exc:
+        from tubevault.core.downloader import MembersOnlyError
+        if isinstance(exc, MembersOnlyError):
+            raise
         msg = f"yt-dlp subtitle extraction failed for {video_id}: {exc}"
         logger.warning(msg)
         if log_callback:
@@ -102,11 +105,19 @@ def _fetch_via_ytdlp(
 ) -> list[dict[str, Any]] | None:
     """Use yt-dlp to download subtitles and parse them."""
     import yt_dlp
-    from tubevault.core.downloader import _YdlLogger
+    from tubevault.core.downloader import MembersOnlyError, _MEMBERS_ONLY_RE, _YdlLogger
 
     out_dir = video_dir(channel_name, video_id)
     ensure_dir(out_dir)
     url = f"https://www.youtube.com/watch?v={video_id}"
+
+    _members_only: list[bool] = [False]
+
+    def _wrapped_log(msg: str) -> None:
+        if _MEMBERS_ONLY_RE.search(msg):
+            _members_only[0] = True
+        if log_callback:
+            log_callback(msg)
 
     opts: dict[str, Any] = {
         "skip_download": True,
@@ -123,11 +134,13 @@ def _fetch_via_ytdlp(
     proxy = load_proxy_url()
     if proxy:
         opts["proxy"] = proxy
-    if log_callback:
-        opts["logger"] = _YdlLogger(log_callback)
+    opts["logger"] = _YdlLogger(_wrapped_log)
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.download([url])
+
+    if _members_only[0]:
+        raise MembersOnlyError(f"Members-only video: {video_id}")
 
     # Parse the downloaded json3 subtitle file
     for sub_file in out_dir.glob("sub.*.json3"):
