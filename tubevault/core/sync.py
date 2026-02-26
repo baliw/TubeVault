@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from tubevault.core.config import load_config
+from tubevault.core.config import QUALITY_MAP, load_config
 from tubevault.core.database import (
     load_library,
     mark_library_synced,
@@ -316,12 +316,12 @@ async def sync_all_channels(
     """
     config = load_config()
     channels = config.get("channels", [])
-    quality = config.get("download_quality", "1080p")
     max_concurrent = config.get("max_concurrent_downloads", 2)
 
     for channel in channels:
         if not channel.get("auto_sync", True):
             continue
+        quality = QUALITY_MAP.get(channel.get("quality", "high"), "1080p")
         await sync_channel(
             channel_name=channel["name"],
             channel_url=channel["url"],

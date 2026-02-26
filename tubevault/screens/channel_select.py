@@ -8,11 +8,20 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Button, Header, Input, Label, ListItem, ListView, Static
+from textual.widgets import Button, Header, Input, Label, ListItem, ListView, Select, Static
 
-from tubevault.core.config import add_channel, load_config, remove_channel
+from tubevault.core.config import QUALITY_MAP, add_channel, load_config, remove_channel, update_channel
 
 logger = logging.getLogger(__name__)
+
+# Quality tier display helpers
+_QUALITY_LABELS = {"high": "High", "mid": "Mid", "low": "Low"}
+_QUALITY_COLORS = {"high": "green", "mid": "yellow", "low": "dim"}
+_QUALITY_OPTIONS = [
+    ("High  (1080p)", "high"),
+    ("Mid   (720p)",  "mid"),
+    ("Low   (480p)",  "low"),
+]
 
 
 class _ChannelList(ListView):
@@ -20,14 +29,13 @@ class _ChannelList(ListView):
 
     def action_cursor_up(self) -> None:
         if self.index == 0 or self.index is None:
-            # At the top — hand off focus to the first action button.
             self.screen.query_one("#btn_sync", Button).focus()
         else:
             super().action_cursor_up()
 
 
 class ChannelSelectScreen(Screen):
-    """Startup screen: list channels, add/remove, sync all.
+    """Startup screen: list channels, add/remove/edit, sync all.
 
     Navigation:
         ↑↓     — navigate channel list; ↑ at top moves to action bar
@@ -35,6 +43,7 @@ class ChannelSelectScreen(Screen):
         ↓      — from action bar, return to channel list
         Enter  — select channel / activate button
         a      — add new channel
+        e      — edit selected channel
         r      — remove selected channel
         s      — synchronize all channels
         q / Escape — quit
@@ -46,6 +55,7 @@ class ChannelSelectScreen(Screen):
         Binding("escape", "app.quit", "Quit", priority=True),
         Binding("q", "app.quit", "Quit", priority=True),
         Binding("a", "add_channel", "Add Channel", priority=True),
+        Binding("e", "edit_channel", "Edit Channel", priority=True),
         Binding("r", "remove_channel", "Remove Channel", priority=True),
         Binding("s", "sync_all", "Sync All", priority=True),
     ]
@@ -67,6 +77,7 @@ class ChannelSelectScreen(Screen):
             with Horizontal(id="action_bar"):
                 yield Button("Sync All", id="btn_sync")
                 yield Button("Add", id="btn_add")
+                yield Button("Edit", id="btn_edit")
                 yield Button("Remove", id="btn_remove")
                 yield Button("Quit", id="btn_quit")
             yield _ChannelList(id="channel_list")
@@ -83,7 +94,12 @@ class ChannelSelectScreen(Screen):
         for ch in channels:
             name = ch["name"]
             url = ch.get("url", "")
-            lv.append(ListItem(Label(f"{name}  [dim]{url}[/dim]")))
+            q = ch.get("quality", "high")
+            q_label = _QUALITY_LABELS.get(q, q)
+            q_color = _QUALITY_COLORS.get(q, "dim")
+            lv.append(ListItem(Label(
+                f"{name}  [{q_color}]{q_label}[/{q_color}]  [dim]{url}[/dim]"
+            )))
         if not channels:
             lv.append(ListItem(Label("[dim]No channels yet — press [bold]a[/bold] to add one.[/dim]")))
         self.call_after_refresh(lv.focus)
@@ -112,12 +128,14 @@ class ChannelSelectScreen(Screen):
     # ------------------------------------------------------------------ Button actions
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id
-        if btn_id == "btn_add":
+        if btn_id == "btn_sync":
+            self.action_sync_all()
+        elif btn_id == "btn_add":
             self.action_add_channel()
+        elif btn_id == "btn_edit":
+            self.action_edit_channel()
         elif btn_id == "btn_remove":
             self.action_remove_channel()
-        elif btn_id == "btn_sync":
-            self.action_sync_all()
         elif btn_id == "btn_quit":
             self.app.action_quit()
 
@@ -133,12 +151,33 @@ class ChannelSelectScreen(Screen):
     def action_add_channel(self) -> None:
         self.app.push_screen(AddChannelScreen(), self._on_channel_added)
 
-    def _on_channel_added(self, result: tuple[str, str] | None) -> None:
+    def _on_channel_added(self, result: tuple[str, str, str] | None) -> None:
         if result:
-            url, name = result
-            add_channel(url, name)
+            url, name, quality = result
+            add_channel(url, name, quality)
             self._refresh_list()
             self.query_one("#status_label", Label).update(f"Added channel: {name}")
+
+    def action_edit_channel(self) -> None:
+        config = load_config()
+        channels = config.get("channels", [])
+        lv = self.query_one("#channel_list", _ChannelList)
+        idx = lv.index
+        if idx is None or idx >= len(channels):
+            return
+        ch = channels[idx]
+        self.app.push_screen(
+            EditChannelScreen(ch),
+            lambda result: self._on_channel_edited(ch["name"], result),
+        )
+
+    def _on_channel_edited(self, original_name: str, result: tuple[str, str, str] | None) -> None:
+        if result:
+            new_name, new_url, new_quality = result
+            update_channel(original_name, new_name or None, new_url or None, new_quality)
+            self._refresh_list()
+            display = new_name if new_name else original_name
+            self.query_one("#status_label", Label).update(f"Updated channel: {display}")
 
     def action_remove_channel(self) -> None:
         config = load_config()
@@ -186,7 +225,7 @@ class ChannelSelectScreen(Screen):
     }
     #action_bar > Button {
         margin-right: 1;
-        min-width: 12;
+        min-width: 10;
     }
     #channel_list {
         width: 100%;
@@ -203,7 +242,7 @@ class ChannelSelectScreen(Screen):
 
 
 class AddChannelScreen(ModalScreen):
-    """Modal overlay for entering a new channel URL and name."""
+    """Modal overlay for entering a new channel URL, name, and quality."""
 
     BINDINGS = [("escape", "cancel", "Cancel")]
 
@@ -214,6 +253,8 @@ class AddChannelScreen(ModalScreen):
             yield Input(placeholder="https://www.youtube.com/@channel or @handle", id="url_input")
             yield Label("Display name (slug, no spaces):")
             yield Input(placeholder="my_channel", id="name_input")
+            yield Label("Download quality:")
+            yield Select(_QUALITY_OPTIONS, value="high", id="quality_select")
             with Horizontal(id="btn_row"):
                 yield Button("Add", id="add_btn", variant="primary")
                 yield Button("Cancel", id="cancel_btn")
@@ -225,8 +266,9 @@ class AddChannelScreen(ModalScreen):
         if event.button.id == "add_btn":
             url = self.query_one("#url_input", Input).value.strip()
             name = self.query_one("#name_input", Input).value.strip().replace(" ", "_")
+            quality = self.query_one("#quality_select", Select).value or "high"
             if url and name:
-                self.dismiss((url, name))
+                self.dismiss((url, name, str(quality)))
             else:
                 self.query_one("#modal_title", Static).update("Add Channel — URL and name are required!")
         else:
@@ -246,7 +288,79 @@ class AddChannelScreen(ModalScreen):
         border: solid $accent;
         padding: 1 2;
     }
-    #dialog > Label, #dialog > Input, #dialog > Static {
+    #dialog > Label, #dialog > Input, #dialog > Static, #dialog > Select {
+        margin-bottom: 1;
+        width: 100%;
+    }
+    #modal_title {
+        text-style: bold;
+        color: $accent;
+    }
+    #btn_row {
+        margin-top: 1;
+        align: right middle;
+        height: auto;
+    }
+    #btn_row > Button {
+        margin-left: 1;
+    }
+    """
+
+
+class EditChannelScreen(ModalScreen):
+    """Modal overlay for editing an existing channel's name, URL, and quality."""
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, channel: dict[str, Any], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._channel = channel
+
+    def compose(self) -> ComposeResult:
+        ch = self._channel
+        current_quality = ch.get("quality", "high")
+        with Vertical(id="dialog"):
+            yield Static(f"Edit Channel: {ch['name']}", id="modal_title")
+            yield Label("Display name (slug, no spaces):")
+            yield Input(value=ch.get("name", ""), id="name_input")
+            yield Label("YouTube channel URL or @handle:")
+            yield Input(value=ch.get("url", ""), id="url_input")
+            yield Label("Download quality:")
+            yield Select(_QUALITY_OPTIONS, value=current_quality, id="quality_select")
+            with Horizontal(id="btn_row"):
+                yield Button("Save", id="save_btn", variant="primary")
+                yield Button("Cancel", id="cancel_btn")
+
+    def on_mount(self) -> None:
+        self.query_one("#name_input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "save_btn":
+            name = self.query_one("#name_input", Input).value.strip().replace(" ", "_")
+            url = self.query_one("#url_input", Input).value.strip()
+            quality = self.query_one("#quality_select", Select).value or "high"
+            if name and url:
+                self.dismiss((name, url, str(quality)))
+            else:
+                self.query_one("#modal_title", Static).update("Edit Channel — name and URL are required!")
+        else:
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    DEFAULT_CSS = """
+    EditChannelScreen {
+        align: center middle;
+    }
+    #dialog {
+        width: 72;
+        height: auto;
+        background: $panel;
+        border: solid $accent;
+        padding: 1 2;
+    }
+    #dialog > Label, #dialog > Input, #dialog > Static, #dialog > Select {
         margin-bottom: 1;
         width: 100%;
     }

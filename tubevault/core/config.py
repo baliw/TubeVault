@@ -11,6 +11,9 @@ from tubevault.utils.helpers import ensure_dir, tubevault_root
 
 logger = logging.getLogger(__name__)
 
+# Maps the three user-facing quality tiers to yt-dlp height strings.
+QUALITY_MAP: dict[str, str] = {"high": "1080p", "mid": "720p", "low": "480p"}
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "channels": [],
     "anthropic_api_key_env": "ANTHROPIC_API_KEY",
@@ -80,12 +83,13 @@ def _normalize_channel_url(url: str) -> str:
     return url
 
 
-def add_channel(url: str, name: str) -> dict[str, Any]:
+def add_channel(url: str, name: str, quality: str = "high") -> dict[str, Any]:
     """Add a channel to the config.
 
     Args:
         url: Channel URL or @handle.
         name: Display name / slug for the channel.
+        quality: Download quality tier — ``'high'``, ``'mid'``, or ``'low'``.
 
     Returns:
         The new channel entry dict.
@@ -94,12 +98,44 @@ def add_channel(url: str, name: str) -> dict[str, Any]:
     entry = {
         "name": name,
         "url": _normalize_channel_url(url),
+        "quality": quality if quality in QUALITY_MAP else "high",
         "added_date": datetime.now(timezone.utc).isoformat(),
         "auto_sync": True,
     }
     config["channels"].append(entry)
     save_config(config)
     return entry
+
+
+def update_channel(
+    name: str,
+    new_name: str | None = None,
+    new_url: str | None = None,
+    new_quality: str | None = None,
+) -> bool:
+    """Update an existing channel's fields.
+
+    Args:
+        name: Current channel name/slug to look up.
+        new_name: Replacement name, or None to leave unchanged.
+        new_url: Replacement URL/handle, or None to leave unchanged.
+        new_quality: Replacement quality tier, or None to leave unchanged.
+
+    Returns:
+        True if the channel was found and updated, False otherwise.
+    """
+    config = load_config()
+    for ch in config["channels"]:
+        if ch["name"] == name:
+            if new_name:
+                ch["name"] = new_name
+            if new_url:
+                ch["url"] = _normalize_channel_url(new_url)
+            if new_quality and new_quality in QUALITY_MAP:
+                ch["quality"] = new_quality
+            save_config(config)
+            return True
+    return False
 
 
 def remove_channel(name: str) -> bool:

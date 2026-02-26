@@ -14,7 +14,7 @@ from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Footer, Header, Label, RichLog, Static
 
-from tubevault.core.config import load_config
+from tubevault.core.config import QUALITY_MAP, load_config
 from tubevault.core.sync import (
     INTER_REQUEST_DELAY,
     ChannelSyncProgress,
@@ -249,7 +249,11 @@ class SyncScreen(Screen):
             try:
                 if self._channel_name and self._channel_url:
                     config = load_config()
-                    quality = config.get("download_quality", "1080p")
+                    ch = next(
+                        (c for c in config.get("channels", []) if c["name"] == self._channel_name),
+                        {},
+                    )
+                    quality = QUALITY_MAP.get(ch.get("quality", "high"), "1080p")
                     max_concurrent = config.get("max_concurrent_downloads", 2)
                     await sync_channel(
                         channel_name=self._channel_name,
