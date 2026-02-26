@@ -200,7 +200,7 @@ async def download_video(
     channel_name: str,
     video_id: str,
     quality: str = "1080p",
-    progress_callback: Callable[[float], None] | None = None,
+    progress_callback: Callable[[float, int, int], None] | None = None,
     log_callback: LogCallback | None = None,
 ) -> Path | None:
     """Download a YouTube video to the channel's video directory.
@@ -226,7 +226,7 @@ def _download_sync(
     url: str,
     out_dir: Path,
     quality: str,
-    progress_callback: Callable[[float], None] | None,
+    progress_callback: Callable[[float, int, int], None] | None,
     log_callback: LogCallback | None,
 ) -> Path | None:
     """Synchronous yt-dlp download."""
@@ -237,10 +237,12 @@ def _download_sync(
             if d["status"] == "downloading":
                 total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
                 downloaded = d.get("downloaded_bytes") or 0
-                if total:
-                    progress_callback(downloaded / total)
+                pct = (downloaded / total) if total else 0.0
+                progress_callback(pct, downloaded, total)
             elif d["status"] == "finished":
-                progress_callback(1.0)
+                downloaded = d.get("downloaded_bytes") or 0
+                total = d.get("total_bytes") or downloaded
+                progress_callback(1.0, downloaded, total)
 
         opts["progress_hooks"] = [_hook]
 

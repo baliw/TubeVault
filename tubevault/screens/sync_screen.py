@@ -36,6 +36,16 @@ BAR_WIDTH = 16
 SPINNER_FRAMES = "⣾⣽⣻⢿⡿⣟⣯⣷"
 
 
+def _fmt_bytes(n: int) -> str:
+    if n >= 1024 ** 3:
+        return f"{n / 1024 ** 3:.1f} GB"
+    if n >= 1024 ** 2:
+        return f"{n / 1024 ** 2:.0f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.0f} KB"
+    return f"{n} B"
+
+
 def _render_slot_header(vp: VideoProgress, spinner_frame: int = 0) -> Group:
     """Build a 3-line Rich renderable for an active video slot.
 
@@ -79,7 +89,13 @@ def _render_slot_header(vp: VideoProgress, spinner_frame: int = 0) -> Group:
         filled = int(dl_pct / 100 * BAR_WIDTH)
         bar = "▓" * filled + "░" * (BAR_WIDTH - filled)
         stage_style = "green" if vp.download >= 1.0 else "cyan"
-        stage_line = Text(f"Downloading  {bar}  {dl_pct:3d}%", style=stage_style)
+        size_str = ""
+        if vp.total_bytes > 0:
+            size_str = f"  {_fmt_bytes(vp.downloaded_bytes)} / {_fmt_bytes(vp.total_bytes)}"
+        elif vp.downloaded_bytes > 0:
+            size_str = f"  {_fmt_bytes(vp.downloaded_bytes)}"
+        quality_str = f"  {vp.quality}" if vp.quality else ""
+        stage_line = Text(f"Downloading  {bar}  {dl_pct:3d}%{size_str}{quality_str}", style=stage_style)
 
     # --- Line 3: per-stage status icons ---
     dl_icon = _icon(vp.download)

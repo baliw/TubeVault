@@ -37,6 +37,9 @@ class VideoProgress:
     title: str
     channel_name: str = ""       # which channel this video belongs to
     download: float = 0.0        # 0.0–1.0
+    downloaded_bytes: int = 0
+    total_bytes: int = 0
+    quality: str = ""            # e.g. "1080p"
     transcript: str = "pending"  # pending | in_progress | done | skipped | error
     summary: str = "pending"     # pending | in_progress | done | skipped | error
 
@@ -182,7 +185,7 @@ async def _process_video(
     """Process a single video: download, transcript, summary."""
     video_id = video["video_id"]
     title = video.get("title", video_id)
-    vp = VideoProgress(video_id=video_id, title=title, channel_name=channel_name)
+    vp = VideoProgress(video_id=video_id, title=title, channel_name=channel_name, quality=quality)
     prog.slots[slot_idx] = vp
     _emit(callback, prog)
 
@@ -197,7 +200,7 @@ async def _process_video(
                 channel_name,
                 video_id,
                 quality=quality,
-                progress_callback=lambda p: _update_download(vp, p, prog, callback),
+                progress_callback=lambda p, d, t: _update_download(vp, p, d, t, prog, callback),
                 log_callback=log_callback,
             )
             if mp4_path is None:
@@ -280,10 +283,14 @@ async def _process_video(
 def _update_download(
     vp: VideoProgress,
     progress: float,
+    downloaded: int,
+    total: int,
     prog: ChannelSyncProgress,
     callback: SyncCallback | None,
 ) -> None:
     vp.download = progress
+    vp.downloaded_bytes = downloaded
+    vp.total_bytes = total
     _emit(callback, prog)
 
 
