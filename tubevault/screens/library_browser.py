@@ -79,16 +79,14 @@ class LibraryBrowserScreen(Screen):
         self._load_collection()
 
     async def _load_all_progressive(self) -> None:
-        """Load library pages newest-first, rendering each batch immediately.
+        """Load all library pages, globally sort newest-first, then render.
 
-        Pages are loaded from highest-numbered (newest videos) down to page 1
-        (oldest), so the most recent videos appear at the top of the list and
-        are usable before older pages have been read.
-
-        All file I/O runs on a daemon thread.  Within each page, videos are
-        appended to the ListView in chunks of _APPEND_CHUNK, yielding the
-        event loop between each chunk so key presses (navigation, Enter to
-        open a video) are processed even while loading is in progress.
+        All pages are read from disk first (fast — pure JSON I/O) while the
+        status label shows progress.  After all pages are collected the full
+        list is sorted by upload_date descending so videos never appear out of
+        order across page boundaries.  The sorted list is then rendered to the
+        ListView in chunks of _APPEND_CHUNK, yielding the event loop between
+        each chunk so key presses are processed during rendering.
         """
         import asyncio
         from tubevault.utils.helpers import run_in_daemon_thread
@@ -102,38 +100,38 @@ class LibraryBrowserScreen(Screen):
 
             video_list = self.query_one("#all_list", VideoList)
             total_pages = len(page_nums)
-            self._all_videos = []
-            is_first_chunk = True
+            all_videos: list[dict] = []
 
-            for batch_idx, pn in enumerate(reversed(page_nums)):
+            # Phase 1: read all pages from disk, updating the status label.
+            for batch_idx, pn in enumerate(page_nums):
                 page = await run_in_daemon_thread(
                     load_library_page, self._channel_name, pn
                 )
-                # Sort newest-first within each page so higher-numbered pages
-                # (always newer) appear above lower-numbered pages.
-                videos = sorted(
-                    page.get("videos", []),
-                    key=lambda v: v.get("upload_date", ""),
-                    reverse=True,
-                )
-                self._all_videos.extend(videos)
-
-                # Append in small chunks, yielding between each so the event
-                # loop can process key events while the list is being built.
-                for chunk_start in range(0, len(videos), _APPEND_CHUNK):
-                    chunk = videos[chunk_start : chunk_start + _APPEND_CHUNK]
-                    if is_first_chunk:
-                        video_list.set_videos(chunk)
-                        is_first_chunk = False
-                    else:
-                        video_list.append_videos(chunk)
-                    await asyncio.sleep(0)
-
-                if total_pages > 1 and batch_idx < total_pages - 1:
+                all_videos.extend(page.get("videos", []))
+                if total_pages > 1:
                     remaining = total_pages - batch_idx - 1
-                    self._set_status(
-                        f"Loading… {remaining} more page{'s' if remaining != 1 else ''}"
-                    )
+                    if remaining:
+                        self._set_status(
+                            f"Loading… {remaining} more page{'s' if remaining != 1 else ''}"
+                        )
+
+            # Phase 2: global sort newest-first.
+            self._all_videos = sorted(
+                all_videos,
+                key=lambda v: v.get("upload_date", ""),
+                reverse=True,
+            )
+
+            # Phase 3: render in chunks, yielding between each.
+            is_first_chunk = True
+            for chunk_start in range(0, len(self._all_videos), _APPEND_CHUNK):
+                chunk = self._all_videos[chunk_start : chunk_start + _APPEND_CHUNK]
+                if is_first_chunk:
+                    video_list.set_videos(chunk)
+                    is_first_chunk = False
+                else:
+                    video_list.append_videos(chunk)
+                await asyncio.sleep(0)
 
             if total_pages > 1:
                 self._set_status("")
