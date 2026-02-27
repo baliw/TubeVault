@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from tubevault.core.config import QUALITY_MAP, load_config
 from tubevault.core.database import (
+    batch_update_upload_dates,
     load_library,
     mark_library_synced,
     save_summary,
@@ -110,9 +111,17 @@ async def sync_channel(
         if v.get("has_video") and v.get("has_transcript") and v.get("has_summary")
     }
 
+    # If no library entry has an upload_date yet, fetch the full channel
+    # listing (disabling the early-stop optimisation) so every video gets its
+    # date populated in a single pass.
+    has_any_date = any(v.get("upload_date") for v in library.get("videos", []))
+    effective_stop_at_ids = stop_at_ids if has_any_date else None
+    if not has_any_date and existing_ids:
+        _log(log_callback, "No publish dates in library — fetching full listing to populate dates…")
+
     try:
         remote_videos = await fetch_channel_videos(
-            channel_url, log_callback=log_callback, stop_at_ids=stop_at_ids,
+            channel_url, log_callback=log_callback, stop_at_ids=effective_stop_at_ids,
         )
     except Exception as exc:
         prog.error = str(exc)
@@ -121,6 +130,13 @@ async def sync_channel(
         _log(log_callback, f"ERROR fetching channel videos: {exc}")
         logger.error("Failed to fetch channel videos: %s", exc)
         return
+
+    # Backfill upload_date for any existing library entries that are empty.
+    # The remote listing now carries dates (via timestamp fallback); update
+    # existing entries in a single page-level pass — no extra API calls.
+    remote_dates = {v["video_id"]: v["upload_date"] for v in remote_videos if v.get("upload_date")}
+    if remote_dates:
+        batch_update_upload_dates(channel_name, remote_dates)
 
     new_videos = [v for v in remote_videos if v["video_id"] not in existing_ids]
     backfill_videos = [
@@ -447,10 +463,15 @@ async def sync_all_channels(
             if v.get("has_video") and v.get("has_transcript") and v.get("has_summary")
         }
 
+        has_any_date = any(v.get("upload_date") for v in library.get("videos", []))
+        effective_stop_at_ids = stop_at_ids if has_any_date else None
+        if not has_any_date and existing_ids:
+            _slog("No publish dates in library — fetching full listing to populate dates…")
+
         _slog(f"=== Fetching video list: {ch_name} ===")
         try:
             remote_videos = await fetch_channel_videos(
-                ch_url, log_callback=_slog, stop_at_ids=stop_at_ids,
+                ch_url, log_callback=_slog, stop_at_ids=effective_stop_at_ids,
             )
         except Exception as exc:
             _slog(f"ERROR fetching {ch_name}: {exc}")
@@ -460,6 +481,11 @@ async def sync_all_channels(
             prog.slots[slot_idx] = None
             slot_pool.put_nowait(slot_idx)
             _emit(progress_callback, prog)
+
+        # Backfill upload_date for existing entries missing it.
+        remote_dates = {v["video_id"]: v["upload_date"] for v in remote_videos if v.get("upload_date")}
+        if remote_dates:
+            batch_update_upload_dates(ch_name, remote_dates)
 
         new_videos = [v for v in remote_videos if v["video_id"] not in existing_ids]
         backfill = [

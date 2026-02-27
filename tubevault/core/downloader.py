@@ -225,11 +225,21 @@ def _fetch_channel_videos_sync(
                 if log_callback:
                     log_callback(msg)
                 break
+            # Flat channel extraction often omits upload_date; fall back to
+            # the Unix timestamp yt-dlp always includes.
+            upload_date = _parse_date(entry.get("upload_date") or "")
+            if not upload_date:
+                ts = entry.get("timestamp")
+                if ts:
+                    from datetime import datetime, timezone
+                    dt = datetime.fromtimestamp(float(ts), tz=timezone.utc)
+                    upload_date = dt.strftime("%Y-%m-%d")
+
             results.append(
                 {
                     "video_id": video_id,
                     "title": entry.get("title", ""),
-                    "upload_date": _parse_date(entry.get("upload_date", "")),
+                    "upload_date": upload_date,
                     "duration_seconds": entry.get("duration") or 0,
                     "description": entry.get("description", ""),
                     "thumbnail_url": entry.get("thumbnail", ""),
@@ -247,11 +257,18 @@ def _fetch_channel_videos_sync(
     return results
 
 
-def _parse_date(raw: str) -> str:
-    """Convert yt-dlp YYYYMMDD date to YYYY-MM-DD."""
-    if len(raw) == 8:
-        return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
-    return raw
+def _parse_date(raw: Any) -> str:
+    """Convert a yt-dlp date value to YYYY-MM-DD format.
+
+    Accepts YYYYMMDD strings (yt-dlp's standard output) or Unix timestamps.
+    Returns an empty string if the input is falsy or unrecognisable.
+    """
+    if not raw:
+        return ""
+    s = str(raw).strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    return s
 
 
 async def download_video(

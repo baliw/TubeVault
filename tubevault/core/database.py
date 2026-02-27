@@ -322,6 +322,37 @@ def upsert_video(channel_name: str, entry: dict[str, Any]) -> None:
         )
 
 
+def batch_update_upload_dates(channel_name: str, date_map: dict[str, str]) -> int:
+    """Backfill upload_date for library entries that are currently empty.
+
+    Reads each page once, patches every entry whose video_id appears in
+    *date_map* and whose current upload_date is falsy, then writes the page
+    once only if any entry was changed.  O(pages) disk operations regardless
+    of how many dates are updated.
+
+    Args:
+        channel_name: Channel slug.
+        date_map: Mapping of ``video_id`` → ``upload_date`` (YYYY-MM-DD).
+
+    Returns:
+        Number of library entries updated.
+    """
+    _migrate_library_if_needed(channel_name)
+    updated = 0
+    for pn in _list_page_nums_raw(channel_name):
+        page = load_library_page(channel_name, pn)
+        changed = False
+        for v in page["videos"]:
+            vid = v.get("video_id", "")
+            if vid in date_map and not v.get("upload_date"):
+                v["upload_date"] = date_map[vid]
+                updated += 1
+                changed = True
+        if changed:
+            save_library_page(channel_name, pn, page)
+    return updated
+
+
 def mark_library_synced(channel_name: str) -> None:
     """Update last_synced timestamp in the highest-numbered library page.
 
