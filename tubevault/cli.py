@@ -191,8 +191,16 @@ def _run_tui() -> None:
     from tubevault.app import TubeVaultApp
 
     app = TubeVaultApp()
-    app.run()
-    # Textual's teardown doesn't always restore the cursor; force it here
-    # after run() returns and the terminal is fully back to normal mode.
-    sys.stdout.write("\x1b[?25h")
-    sys.stdout.flush()
+    try:
+        app.run()
+    finally:
+        # Textual writes to /dev/tty directly; sys.stdout may be a different
+        # fd and escape codes sent there don't reach the terminal.  Write to
+        # /dev/tty explicitly so the cursor is always restored.
+        try:
+            with open("/dev/tty", "w") as tty:
+                tty.write("\x1b[?25h")
+                tty.flush()
+        except OSError:
+            sys.stdout.write("\x1b[?25h")
+            sys.stdout.flush()
