@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 @click.command()
 @click.option("--sync", is_flag=True, default=False, help="Run headless sync and exit.")
+@click.option("--fix-dates", is_flag=True, default=False, help="Fetch channel listings and populate missing publish dates, then exit.")
 @click.option("--channel", default=None, help="Channel name/slug to operate on.")
 @click.option("--export", "do_export", is_flag=True, default=False, help="Export summaries to Markdown.")
 @click.option("--output", default=None, type=click.Path(), help="Output file for --export.")
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 @click.option("--verbose", "-v", is_flag=True, default=False, help="Enable verbose logging.")
 def main(
     sync: bool,
+    fix_dates: bool,
     channel: str | None,
     do_export: bool,
     output: str | None,
@@ -35,11 +37,13 @@ def main(
 
     Run without flags to launch the TUI.
     """
-    if sync or do_export:
+    if sync or fix_dates or do_export:
         _configure_headless_logging(verbose)
 
     if sync:
         _run_sync(channel)
+    elif fix_dates:
+        _run_fix_dates(channel)
     elif do_export:
         _run_export(channel, output, master_summary)
     else:
@@ -100,6 +104,52 @@ def _run_sync(channel: str | None) -> None:
         asyncio.run(sync_all_channels(progress_callback=_log_progress))
 
     click.echo("Sync complete.")
+
+
+def _run_fix_dates(channel: str | None) -> None:
+    """Fetch channel listings and backfill missing publish dates."""
+    from tubevault.core.config import load_config
+    from tubevault.core.database import batch_update_upload_dates, list_library_page_nums, load_library_page
+    from tubevault.core.downloader import fetch_channel_videos
+
+    config = load_config()
+    channels_cfg = config.get("channels", [])
+
+    if channel:
+        channels_cfg = [c for c in channels_cfg if c["name"] == channel]
+        if not channels_cfg:
+            click.echo(f"Channel '{channel}' not found in config.", err=True)
+            sys.exit(1)
+
+    total_updated = 0
+    for ch in channels_cfg:
+        ch_name = ch["name"]
+        ch_url = ch["url"]
+
+        # Count how many videos are missing a date before we start.
+        missing = sum(
+            1
+            for pn in list_library_page_nums(ch_name)
+            for v in load_library_page(ch_name, pn)["videos"]
+            if not v.get("upload_date")
+        )
+        if not missing:
+            click.echo(f"{ch_name}: all dates present, skipping.")
+            continue
+
+        click.echo(f"{ch_name}: fetching video listing ({missing} dates missing)…")
+        try:
+            videos = asyncio.run(fetch_channel_videos(ch_url, stop_at_ids=None))
+        except Exception as exc:
+            click.echo(f"{ch_name}: fetch failed — {exc}", err=True)
+            continue
+
+        date_map = {v["video_id"]: v["upload_date"] for v in videos if v.get("upload_date")}
+        updated = batch_update_upload_dates(ch_name, date_map)
+        total_updated += updated
+        click.echo(f"{ch_name}: updated {updated} / {missing} entries.")
+
+    click.echo(f"Done. {total_updated} dates populated across all channels.")
 
 
 def _run_export(channel: str | None, output: str | None, master_summary: bool) -> None:
