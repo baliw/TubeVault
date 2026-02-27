@@ -107,10 +107,11 @@ def _run_sync(channel: str | None) -> None:
 
 
 def _run_fix_dates(channel: str | None) -> None:
-    """Fetch channel listings and backfill missing publish dates."""
+    """Fetch per-video metadata concurrently and backfill missing publish dates."""
     from tubevault.core.config import load_config
     from tubevault.core.database import batch_update_upload_dates, list_library_page_nums, load_library_page
-    from tubevault.core.downloader import fetch_channel_videos
+    from tubevault.core.downloader import fetch_video_metadata
+    from tubevault.utils.helpers import load_proxy_url
 
     config = load_config()
     channels_cfg = config.get("channels", [])
@@ -121,35 +122,55 @@ def _run_fix_dates(channel: str | None) -> None:
             click.echo(f"Channel '{channel}' not found in config.", err=True)
             sys.exit(1)
 
+    proxy = load_proxy_url()
+    # With a proxy each request uses a fresh connection/IP; higher concurrency
+    # is safe.  Without a proxy, stay conservative to avoid rate-limiting.
+    concurrency = 16 if proxy else 2
+
+    async def _fetch_dates(ch_name: str, video_ids: list[str]) -> dict[str, str]:
+        sem = asyncio.Semaphore(concurrency)
+        date_map: dict[str, str] = {}
+        completed = 0
+        total = len(video_ids)
+
+        async def _one(vid: str) -> None:
+            nonlocal completed
+            async with sem:
+                try:
+                    meta = await fetch_video_metadata(vid)
+                    if meta and meta.get("upload_date"):
+                        date_map[vid] = meta["upload_date"]
+                except Exception:
+                    pass
+            completed += 1
+            if completed % 20 == 0 or completed == total:
+                click.echo(f"\r  {ch_name}: {completed}/{total} fetched…   ", nl=False)
+
+        await asyncio.gather(*[_one(vid) for vid in video_ids])
+        click.echo()  # newline after the progress line
+        return date_map
+
     total_updated = 0
     for ch in channels_cfg:
         ch_name = ch["name"]
-        ch_url = ch["url"]
 
-        # Count how many videos are missing a date before we start.
-        missing = sum(
-            1
+        missing_ids = [
+            v["video_id"]
             for pn in list_library_page_nums(ch_name)
             for v in load_library_page(ch_name, pn)["videos"]
             if not v.get("upload_date")
-        )
-        if not missing:
+        ]
+        if not missing_ids:
             click.echo(f"{ch_name}: all dates present, skipping.")
             continue
 
-        click.echo(f"{ch_name}: fetching video listing ({missing} dates missing)…")
-        try:
-            videos = asyncio.run(fetch_channel_videos(ch_url, stop_at_ids=None))
-        except Exception as exc:
-            click.echo(f"{ch_name}: fetch failed — {exc}", err=True)
-            continue
-
-        date_map = {v["video_id"]: v["upload_date"] for v in videos if v.get("upload_date")}
+        click.echo(f"{ch_name}: {len(missing_ids)} dates missing, fetching (concurrency={concurrency})…")
+        date_map = asyncio.run(_fetch_dates(ch_name, missing_ids))
         updated = batch_update_upload_dates(ch_name, date_map)
         total_updated += updated
-        click.echo(f"{ch_name}: updated {updated} / {missing} entries.")
+        click.echo(f"{ch_name}: updated {updated} / {len(missing_ids)} entries.")
 
-    click.echo(f"Done. {total_updated} dates populated across all channels.")
+    click.echo(f"\nDone. {total_updated} dates populated across all channels.")
 
 
 def _run_export(channel: str | None, output: str | None, master_summary: bool) -> None:

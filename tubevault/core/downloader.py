@@ -367,7 +367,10 @@ async def fetch_video_metadata(video_id: str) -> dict[str, Any] | None:
         Metadata dict or None on failure.
     """
     url = f"https://www.youtube.com/watch?v={video_id}"
-    opts = {"quiet": True, "no_warnings": True, "ignoreerrors": True}
+    opts: dict[str, Any] = {"quiet": True, "no_warnings": True, "ignoreerrors": True}
+    proxy = load_proxy_url()
+    if proxy:
+        opts["proxy"] = proxy
     try:
         info = await run_in_daemon_thread(_extract_info, url, opts)
     except Exception as exc:
