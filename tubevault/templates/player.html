@@ -29,6 +29,23 @@
     display: block;
     border-radius: 4px;
   }
+  .speed-controls {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.6rem;
+  }
+  .speed-btn {
+    background: #2a2a2a;
+    color: #aaa;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 0.3rem 0.7rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .speed-btn:hover { background: #383838; color: #fff; border-color: #666; }
+  .speed-btn.active { background: #1a4a8a; color: #7abfff; border-color: #4a7ab5; }
   .no-video {
     background: #222;
     border: 1px dashed #555;
@@ -84,6 +101,12 @@
     <source src="{{ video_uri }}" type="video/mp4">
     Your browser does not support the video tag.
   </video>
+  <div class="speed-controls">
+    <button class="speed-btn" onclick="setSpeed(1.25)">1.25×</button>
+    <button class="speed-btn" onclick="setSpeed(1.5)">1.5×</button>
+    <button class="speed-btn" onclick="setSpeed(1.75)">1.75×</button>
+    <button class="speed-btn" onclick="setSpeed(2)">2×</button>
+  </div>
   {% else %}
   <div class="no-video">Video file not downloaded yet.</div>
   {% endif %}
@@ -123,6 +146,15 @@ function seekTo(seconds) {
   if (player) {
     player.currentTime = seconds;
     player.play();
+  }
+}
+function setSpeed(rate) {
+  var player = document.getElementById('player');
+  if (player) {
+    player.playbackRate = rate;
+    document.querySelectorAll('.speed-btn').forEach(function(btn) {
+      btn.classList.toggle('active', parseFloat(btn.textContent) === rate);
+    });
   }
 }
 </script>
