@@ -121,3 +121,7 @@ def _run_tui() -> None:
 
     app = TubeVaultApp()
     app.run()
+    # Textual's teardown doesn't always restore the cursor; force it here
+    # after run() returns and the terminal is fully back to normal mode.
+    sys.stdout.write("\x1b[?25h")
+    sys.stdout.flush()
